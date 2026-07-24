@@ -1,0 +1,40 @@
+# Git and IDE
+.git
+.gitignore
+.vscode
+.cursor
+*.md
+!deploy/README.md
+
+# Frontend dev artifacts (rebuilt in image)
+Frontend/node_modules
+Frontend/.next
+Frontend/.env
+Frontend/.env.local
+Frontend/tsconfig.tsbuildinfo
+Frontend/pnpm-lock.yaml
+
+# Backend heavy data (mounted from host at /root/ecommerce/Backend)
+Backend/datasets
+Backend/models
+Backend/upload_jobs
+Backend/__pycache__
+Backend/*.pyc
+Backend/daraz_multicategory_pakistan_100k.csv
+Backend/daraz_multicategory_pakistan_500k.csv
+Backend/future_sales_predictions.csv
+Backend/top_20_products.csv
+Backend/sales_trend_model.json
+Backend/label_encoders.pkl
+Backend/feature_importance.png
+Backend/feature_columns.json
+Backend/model_meta.json
+
+# Local docs and samples
+docs
+SAMPLE_PREDICTION_DATA.md
+
+# Deploy secrets (never bake into image)
+.env
+.env.production
+.env.production.local

@@ -1,0 +1,37 @@
+# TLS/Reverse-proxy overlay. Use together with docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d
+#
+# nginx     - serves http://trendinsight.live and https://trendinsight.live
+# certbot   - issues + renews Let's Encrypt certs (long-running renewal loop)
+
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: ecommerce-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./deploy/nginx/letsencrypt:/etc/letsencrypt
+      - ./deploy/nginx/www:/var/www/certbot
+    networks:
+      - pgnet
+    depends_on:
+      - ecommerce-app
+
+  certbot:
+    image: certbot/certbot:latest
+    container_name: ecommerce-certbot
+    restart: unless-stopped
+    volumes:
+      - ./deploy/nginx/letsencrypt:/etc/letsencrypt
+      - ./deploy/nginx/www:/var/www/certbot
+    entrypoint: /bin/sh -c
+    command: >
+      'trap exit TERM;
+       while :; do
+         certbot renew --webroot -w /var/www/certbot --quiet;
+         sleep 12h & wait $${!};
+       done'

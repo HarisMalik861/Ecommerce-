@@ -1,0 +1,2 @@
+# Placeholder so deploy/nginx/letsencrypt and www subdirs survive in the repo.
+# certbot writes into letsencrypt/, nginx serves ACME challenges from www/.

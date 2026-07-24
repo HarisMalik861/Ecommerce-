@@ -1,0 +1,29 @@
+# Ecommerce deployment on DigitalOcean droplet
+# Before first run: set POSTGRES_NETWORK in .env.production (see deploy/README.md)
+
+services:
+  ecommerce-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ecommerce-app:latest
+    container_name: ecommerce-app
+    restart: unless-stopped
+    ports:
+      - "3003:3000"
+    env_file:
+      - .env.production
+    volumes:
+      # Trained models, datasets, upload jobs (copied to host once)
+      - /root/ecommerce/Backend:/app/Backend
+      # Prediction history JSON (writable at runtime)
+      - /root/ecommerce/Frontend-data:/app/Frontend/data
+    networks:
+      - pgnet
+
+networks:
+  pgnet:
+    external: true
+    # Replace with your postgres container network name, e.g. trackit_default
+    # Discover: docker inspect postgres --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}'
+    name: ${POSTGRES_NETWORK:-trackit_default}

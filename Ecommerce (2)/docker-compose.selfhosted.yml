@@ -1,0 +1,62 @@
+# Local self-hosted stack: PostgreSQL + ecommerce app + Cloudflare Tunnel
+# Usage: docker compose --env-file .env.production -f docker-compose.selfhosted.yml up -d
+#
+# Host port 4001 only (never 3000). Public URL via cloudflared -> trendinsight.live
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ecommerce-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./deploy/init-db.sql:/docker-entrypoint-initdb.d/01-init-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  ecommerce-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ecommerce-app:latest
+    container_name: ecommerce-app
+    restart: unless-stopped
+    ports:
+      - "4001:3000"
+    env_file:
+      - .env.production
+    volumes:
+      - ./data/Backend:/app/Backend
+      - ./data/Frontend-data:/app/Frontend/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Login-based tunnel (recommended): `cloudflared tunnel login` + config.yml
+  cloudflared:
+    profiles: [login]
+    image: cloudflare/cloudflared:latest
+    container_name: ecommerce-cloudflared
+    restart: unless-stopped
+    volumes:
+      - ./deploy/cloudflare:/etc/cloudflared:ro
+    command: tunnel --config /etc/cloudflared/config.yml run
+
+  # Token-based tunnel (alternative): set CLOUDFLARE_TUNNEL_TOKEN in .env.production
+  cloudflared-token:
+    profiles: [token]
+    image: cloudflare/cloudflared:latest
+    container_name: ecommerce-cloudflared
+    restart: unless-stopped
+    command: tunnel run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
+
+volumes:
+  postgres_data:
