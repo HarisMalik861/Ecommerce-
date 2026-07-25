@@ -616,33 +616,17 @@ def rebuild_caches_for_active_dataset() -> dict[str, Any]:
         }
 
     trends_cache_path = BACKEND_DIR / "trends_cache.json"
-    trends_payload: dict[str, Any] | None = None
-
-    # Baseline: reuse the committed dashboard cache when it still looks healthy.
-    # Do NOT call build_trends_payload() here — loading prediction CSVs OOMs free tier.
-    if active_id == "baseline-500k" and trends_cache_path.is_file():
-        try:
-            existing = json.loads(trends_cache_path.read_text(encoding="utf-8"))
-            if (
-                isinstance(existing, dict)
-                and existing.get("trendData")
-                and existing.get("trendCategories")
-                and float((existing.get("summary") or {}).get("accuracy") or 0) > 0
-            ):
-                existing["datasetId"] = active_id
-                existing["source"] = existing.get("source") or "committed_cache"
-                trends_payload = existing
-        except Exception as exc:
-            print(f"warning: could not reuse baseline trends cache: {exc}")
-
-    if trends_payload is None:
-        trends_payload = _build_dashboard_payload_from_stream(
-            active_id=active_id,
-            total_rows=total_rows,
-            total_sales=total_sales_all,
-            cat_totals=cat_totals,
-            sales_sample=sales_sample,
-        )
+    # Always rebuild dashboard from the active CSV stream stats.
+    # Never reuse trends_cache.json across activates — a previous dataset's
+    # file would be stamped with the new datasetId and show stale totals.
+    # (Do not call build_trends_payload() — loading prediction CSVs OOMs free tier.)
+    trends_payload = _build_dashboard_payload_from_stream(
+        active_id=active_id,
+        total_rows=total_rows,
+        total_sales=total_sales_all,
+        cat_totals=cat_totals,
+        sales_sample=sales_sample,
+    )
 
     category_cache_path = BACKEND_DIR / "category_trends_cache.json"
     trends_cache_path.write_text(json.dumps(trends_payload), encoding="utf-8")
