@@ -151,25 +151,13 @@ export default function DatasetPage() {
     }
     const payload = await response.json().catch(() => ({}));
 
-    // Job file gone (Render free restart / redeploy) — dataset may still be saved.
+    // Job file gone after restart — never block the upload UI with a hard error.
     if (response.status === 404) {
       setActiveJobId(null);
       localStorage.removeItem("datasetUploadJobId");
       setJobStatus(null);
-      const refreshed = await loadDatasets();
-      const hasNonBaseline = refreshed.some((d) => !d.isBaseline);
-      if (hasNonBaseline) {
-        setUploadError(null);
-        toast.success(
-          "Job status was lost after a server restart, but your dataset is in the list.",
-        );
-      } else {
-        setUploadError({
-          message:
-            "Background job status was lost (server restarted). Refresh the dataset list — if your file is missing, upload it again.",
-        });
-        toast.error("Job status lost — check the dataset list below.");
-      }
+      setUploadError(null);
+      await loadDatasets();
       return true;
     }
 
@@ -252,18 +240,14 @@ export default function DatasetPage() {
   };
 
   useEffect(() => {
+    // Drop stale job ids from older failed uploads so refresh never shows a fake error.
+    try {
+      localStorage.removeItem("datasetUploadJobId");
+    } catch {
+      // ignore
+    }
     void loadDatasets();
   }, [loadDatasets]);
-
-  useEffect(() => {
-    const rememberedJob =
-      typeof window !== "undefined"
-        ? localStorage.getItem("datasetUploadJobId")
-        : null;
-    if (rememberedJob && !activeJobId) {
-      setActiveJobId(rememberedJob);
-    }
-  }, [activeJobId]);
 
   useEffect(() => {
     if (!activeJobId) return;
@@ -282,10 +266,7 @@ export default function DatasetPage() {
           setActiveJobId(null);
           localStorage.removeItem("datasetUploadJobId");
           setJobStatus(null);
-          setUploadError({
-            message:
-              "Could not fetch background job status. The job may still be running — refresh and check the dataset list, or upload again.",
-          });
+          await loadDatasets();
         }
       }
     };

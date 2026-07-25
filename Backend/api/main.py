@@ -12,13 +12,13 @@ Render start command:
 from __future__ import annotations
 
 import csv
-import io
 import json
 import os
 import re
 import sys
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, File, Form, UploadFile
@@ -293,59 +293,61 @@ def _validate_header(header: list[str]) -> dict[str, Any]:
     return {"missing": missing, "extra": extra, "hasExactOrder": has_exact_order}
 
 
-def _light_validate_csv(content: str) -> tuple[int, dict[str, Any], list[str]]:
+def _light_validate_csv_file(path: Path) -> tuple[int, dict[str, Any], list[str]]:
     """
-    Validate header + sample rows without building a giant in-memory row list.
-    Returns (data_row_count, header_validation, row_errors).
+    Stream-validate a CSV on disk: header + sample rows + full row count.
+    Never loads the whole file into a Python string/list (Render free RAM).
     """
-    reader = csv.reader(io.StringIO(content))
-    try:
-        header = next(reader)
-    except StopIteration:
-        return 0, {"missing": REQUIRED_COLUMNS, "extra": [], "hasExactOrder": False}, [
-            "CSV is empty."
-        ]
-
-    header_validation = _validate_header(header)
-    if (
-        header_validation["missing"]
-        or header_validation["extra"]
-        or not header_validation["hasExactOrder"]
-    ):
-        return 0, header_validation, []
-
-    numeric_checks = [
-        ("Is_Flash_Sale", 7),
-        ("Price", 8),
-        ("Discount_Pct", 9),
-        ("Year", 11),
-        ("Sales", 13),
-    ]
-    errors: list[str] = []
-    row_count = 0
-    sample_limit = 80
-
-    for i, row in enumerate(reader, start=2):
-        if len(row) == 1 and not str(row[0]).strip():
-            continue
-        row_count += 1
-        # Only deeply validate a sample; still count every data row.
-        if row_count > sample_limit or len(errors) >= 5:
-            continue
-        if len(row) != len(REQUIRED_COLUMNS):
-            errors.append(
-                f"Row {i} has {len(row)} columns; expected {len(REQUIRED_COLUMNS)}."
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.reader(handle)
+        try:
+            header = next(reader)
+        except StopIteration:
+            return (
+                0,
+                {"missing": REQUIRED_COLUMNS, "extra": [], "hasExactOrder": False},
+                ["CSV is empty."],
             )
-            continue
-        for key, index in numeric_checks:
-            value = (row[index] if index < len(row) else "").strip()
-            try:
-                float(value)
-            except ValueError:
+
+        header_validation = _validate_header(header)
+        if (
+            header_validation["missing"]
+            or header_validation["extra"]
+            or not header_validation["hasExactOrder"]
+        ):
+            return 0, header_validation, []
+
+        numeric_checks = [
+            ("Is_Flash_Sale", 7),
+            ("Price", 8),
+            ("Discount_Pct", 9),
+            ("Year", 11),
+            ("Sales", 13),
+        ]
+        errors: list[str] = []
+        row_count = 0
+        sample_limit = 80
+
+        for i, row in enumerate(reader, start=2):
+            if len(row) == 1 and not str(row[0]).strip():
+                continue
+            row_count += 1
+            if row_count > sample_limit or len(errors) >= 5:
+                continue
+            if len(row) != len(REQUIRED_COLUMNS):
                 errors.append(
-                    f'Row {i} column {key} must be numeric; got "{value}".'
+                    f"Row {i} has {len(row)} columns; expected {len(REQUIRED_COLUMNS)}."
                 )
-                break
+                continue
+            for key, index in numeric_checks:
+                value = (row[index] if index < len(row) else "").strip()
+                try:
+                    float(value)
+                except ValueError:
+                    errors.append(
+                        f'Row {i} column {key} must be numeric; got "{value}".'
+                    )
+                    break
 
     return row_count, header_validation, errors
 
@@ -356,26 +358,56 @@ async def upload_dataset(
     deduplicate: str = Form("false"),
 ) -> JSONResponse:
     """
-    Register the uploaded CSV immediately (sync).
+    Stream CSV to disk and register immediately (sync).
 
-    Full clean+retrain in a background process OOMs/restarts Render free tier,
-    which deleted job status files and made uploads look like they failed.
+    Avoids loading the full file into RAM and never starts a background retrain
+    (that OOMs Render free and made the UI look like uploads failed).
     """
     if not dataset.filename or not dataset.filename.lower().endswith(".csv"):
         return JSONResponse({"error": "Only CSV files are allowed."}, status_code=400)
 
-    content_bytes = await dataset.read()
-    # utf-8-sig strips Excel/Windows BOM so Product_Name is not "\ufeffProduct_Name"
-    content = content_bytes.decode("utf-8-sig", errors="replace")
-    if not content.strip():
+    do_dedupe = deduplicate.lower() == "true"
+    job_id = uuid.uuid4().hex
+    jobs_dir = BACKEND_DIR / "upload_jobs"
+    jobs_dir.mkdir(parents=True, exist_ok=True)
+    uploaded_tmp = jobs_dir / f"upload_{job_id}.csv"
+    cleaned_tmp = jobs_dir / f"upload_{job_id}.cleaned.csv"
+
+    max_bytes = int(os.environ.get("UPLOAD_MAX_BYTES", str(80 * 1024 * 1024)))
+    total_bytes = 0
+    try:
+        with uploaded_tmp.open("wb") as out:
+            while True:
+                chunk = await dataset.read(1024 * 1024)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                if total_bytes > max_bytes:
+                    out.close()
+                    uploaded_tmp.unlink(missing_ok=True)
+                    return JSONResponse(
+                        {"error": f"File too large (max {max_bytes // (1024 * 1024)} MB)."},
+                        status_code=400,
+                    )
+                out.write(chunk)
+    except Exception as write_exc:
+        uploaded_tmp.unlink(missing_ok=True)
+        return JSONResponse(
+            {"error": f"Failed to receive upload: {write_exc}"},
+            status_code=500,
+        )
+
+    if total_bytes == 0:
+        uploaded_tmp.unlink(missing_ok=True)
         return JSONResponse({"error": "Uploaded file is empty."}, status_code=400)
 
-    row_count, header_validation, row_errors = _light_validate_csv(content)
+    row_count, header_validation, row_errors = _light_validate_csv_file(uploaded_tmp)
     if (
         header_validation["missing"]
         or header_validation["extra"]
         or not header_validation["hasExactOrder"]
     ):
+        uploaded_tmp.unlink(missing_ok=True)
         return JSONResponse(
             {
                 "error": (
@@ -389,39 +421,35 @@ async def upload_dataset(
         )
 
     if row_count < 1:
+        uploaded_tmp.unlink(missing_ok=True)
         return JSONResponse(
             {"error": "CSV must contain a header and at least one data row."},
             status_code=400,
         )
 
     if row_errors:
+        uploaded_tmp.unlink(missing_ok=True)
         return JSONResponse(
             {"error": "CSV row validation failed.", "details": row_errors},
             status_code=400,
         )
 
-    do_dedupe = deduplicate.lower() == "true"
-    job_id = uuid.uuid4().hex
-    jobs_dir = BACKEND_DIR / "upload_jobs"
-    jobs_dir.mkdir(parents=True, exist_ok=True)
-    uploaded_tmp = jobs_dir / f"upload_{job_id}.csv"
-    uploaded_tmp.write_text(content, encoding="utf-8")
-    # Free large string ASAP on small Render instances.
-    del content
-    del content_bytes
-
     preprocessing_report: dict[str, Any] = {
         "inputRows": row_count,
         "rowsAfterCleaning": row_count,
         "deduplicated": False,
-        "operationsApplied": ["header_validated", "sample_rows_validated", "registered_as_uploaded"],
+        "operationsApplied": [
+            "streamed_to_disk",
+            "header_validated",
+            "sample_rows_validated",
+            "registered_as_uploaded",
+        ],
     }
 
-    # Optional light clean/dedupe only for smaller files (avoids OOM on Render free).
-    max_clean_bytes = int(os.environ.get("UPLOAD_CLEAN_MAX_BYTES", str(8 * 1024 * 1024)))
+    # Optional light clean/dedupe only for tiny files (avoids OOM on Render free).
+    max_clean_bytes = int(os.environ.get("UPLOAD_CLEAN_MAX_BYTES", str(2 * 1024 * 1024)))
     file_size = uploaded_tmp.stat().st_size
     register_path = uploaded_tmp
-    cleaned_tmp = jobs_dir / f"upload_{job_id}.cleaned.csv"
 
     if file_size <= max_clean_bytes:
         try:
@@ -438,7 +466,6 @@ async def upload_dataset(
             del upload_df
             del cleaned_upload
         except Exception as clean_exc:
-            # Still register the raw validated CSV if cleaning fails.
             preprocessing_report["cleanWarning"] = str(clean_exc)
     elif do_dedupe:
         preprocessing_report["cleanWarning"] = (
@@ -450,30 +477,21 @@ async def upload_dataset(
     except Exception:
         previous_dataset_id = None
 
+    new_dataset_id: str | None = None
     try:
         new_dataset_id = register_dataset(str(register_path), dataset.filename)
         set_active(new_dataset_id)
     except Exception as reg_exc:
         for path in (uploaded_tmp, cleaned_tmp):
-            try:
-                if path.is_file():
-                    path.unlink()
-            except Exception:
-                pass
+            path.unlink(missing_ok=True)
         return JSONResponse(
             {"error": f"Failed to register dataset: {reg_exc}"},
             status_code=500,
         )
     finally:
         for path in (uploaded_tmp, cleaned_tmp):
-            try:
-                if path.is_file():
-                    path.unlink()
-            except Exception:
-                pass
+            path.unlink(missing_ok=True)
 
-    # Never kick off full XGBoost retrain on upload here — it restarts Render free
-    # and makes the UI report failure even when the dataset was saved.
     result = {
         "newDatasetId": new_dataset_id,
         "previousDatasetId": previous_dataset_id,
@@ -484,9 +502,7 @@ async def upload_dataset(
         "preprocessingReport": preprocessing_report,
     }
     message = (
-        "Dataset registered and activated. Model retrain skipped on this server "
-        "(memory limits). The dataset is available; predictions keep using the "
-        "previous model until a retrain succeeds."
+        "Dataset registered and activated successfully."
     )
     write_job(
         job_id,
