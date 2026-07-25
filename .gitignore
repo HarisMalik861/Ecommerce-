@@ -31,3 +31,5 @@ Ecommerce (2)/deploy/cloudflare/cf-state/
 **/*.lnk
 Backend/upload_jobs/*.csv
 Backend/upload_jobs/*.json
+
+.deploy-secrets.local.json
