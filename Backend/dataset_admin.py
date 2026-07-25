@@ -123,6 +123,11 @@ def cmd_activate(dataset_id: str, status_path: str | None):
     try:
         set_active(dataset_id)
 
+        used_cache = False
+        retrained = False
+        predictions_refreshed = False
+        train_error = None
+
         if has_cached_model(dataset_id):
             write_status(
                 status_path,
@@ -135,36 +140,72 @@ def cmd_activate(dataset_id: str, status_path: str | None):
             load_cache(dataset_id)
             used_cache = True
         else:
-            write_status(
-                status_path,
-                {"status": "running", "progress": 50, "message": "Training model"},
-            )
-            run_script("train_model.py")
-            write_status(
-                status_path,
-                {"status": "running", "progress": 85, "message": "Refreshing predictions"},
-            )
-            run_script("predict_future_sales.py")
-            try:
-                save_cache(dataset_id)
-            except Exception as cache_exc:
-                print(
-                    f"warning: failed to cache model for {dataset_id}: {cache_exc}"
+            # Full retrain OOMs on Render free (512MB). Keep dataset active and
+            # retain previous model artifacts unless a light retrain is forced.
+            force_retrain = os.environ.get("FORCE_DATASET_RETRAIN", "0") == "1"
+            if force_retrain:
+                write_status(
+                    status_path,
+                    {"status": "running", "progress": 50, "message": "Training model"},
                 )
-            used_cache = False
+                try:
+                    run_script("train_model.py")
+                    retrained = True
+                    write_status(
+                        status_path,
+                        {
+                            "status": "running",
+                            "progress": 85,
+                            "message": "Refreshing predictions",
+                        },
+                    )
+                    run_script("predict_future_sales.py")
+                    predictions_refreshed = True
+                    try:
+                        save_cache(dataset_id)
+                    except Exception as cache_exc:
+                        print(
+                            f"warning: failed to cache model for {dataset_id}: {cache_exc}"
+                        )
+                except Exception as train_exc:
+                    train_error = str(train_exc)
+                    print(f"warning: retrain failed, dataset kept active: {train_error}")
+                    if model_backup:
+                        restore_file(model_backup, MODEL_FILE)
+                    if enc_backup:
+                        restore_file(enc_backup, ENCODERS_FILE)
+                    if feat_backup:
+                        restore_file(feat_backup, FEATURES_FILE)
+            else:
+                write_status(
+                    status_path,
+                    {
+                        "status": "running",
+                        "progress": 80,
+                        "message": (
+                            "Dataset activated. Skipping retrain on this server "
+                            "(low memory). Predictions keep using the previous model."
+                        ),
+                    },
+                )
 
         result = {
             "activeId": dataset_id,
             "previousDatasetId": previous_id,
-            "retrained": not used_cache,
-            "predictionsRefreshed": not used_cache,
+            "retrained": retrained,
+            "predictionsRefreshed": predictions_refreshed,
             "usedCache": used_cache,
+            "trainError": train_error,
         }
-        message = (
-            "Active dataset switched (cached model loaded)"
-            if used_cache
-            else "Active dataset switched and model retrained"
-        )
+        if used_cache:
+            message = "Active dataset switched (cached model loaded)"
+        elif retrained and predictions_refreshed:
+            message = "Active dataset switched and model retrained"
+        else:
+            message = (
+                "Active dataset switched. Model retrain skipped "
+                "(not enough server memory). Dataset is still available."
+            )
         write_status(
             status_path,
             {

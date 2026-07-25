@@ -48,9 +48,12 @@ def _write_registry(data: dict[str, Any]) -> None:
 
 
 def _count_csv_rows(csv_path: str) -> int:
+    """Count data rows without loading the full CSV into memory."""
     try:
-        df = pd.read_csv(csv_path)
-        return int(len(df))
+        with open(csv_path, "rb") as handle:
+            # Subtract header line when present.
+            line_count = sum(1 for _ in handle)
+        return max(0, line_count - 1)
     except Exception:
         return 0
 

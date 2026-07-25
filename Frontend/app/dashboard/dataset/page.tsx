@@ -151,16 +151,25 @@ export default function DatasetPage() {
     }
     const payload = await response.json().catch(() => ({}));
 
-    // Job file gone (Render free restart / redeploy) — stop polling cleanly.
+    // Job file gone (Render free restart / redeploy) — dataset may still be saved.
     if (response.status === 404) {
       setActiveJobId(null);
       localStorage.removeItem("datasetUploadJobId");
       setJobStatus(null);
-      setUploadError({
-        message:
-          "Background job was interrupted (server restarted). Please upload the dataset again.",
-      });
-      toast.error("Job interrupted — please upload again.");
+      const refreshed = await loadDatasets();
+      const hasNonBaseline = refreshed.some((d) => !d.isBaseline);
+      if (hasNonBaseline) {
+        setUploadError(null);
+        toast.success(
+          "Job status was lost after a server restart, but your dataset is in the list.",
+        );
+      } else {
+        setUploadError({
+          message:
+            "Background job status was lost (server restarted). Refresh the dataset list — if your file is missing, upload it again.",
+        });
+        toast.error("Job status lost — check the dataset list below.");
+      }
       return true;
     }
 
@@ -209,13 +218,19 @@ export default function DatasetPage() {
             isBaseline: Boolean(prev?.isBaseline),
           });
         }
-        toast.success("Dataset registered and model retrained.");
+        toast.success(
+          result?.retrained
+            ? "Dataset registered and model retrained."
+            : "Dataset uploaded successfully.",
+        );
       } else if (activatedId) {
         await loadDatasets();
-        toast.success("Active dataset switched and model retrained.");
+        toast.success(
+          payload?.message || "Active dataset switched.",
+        );
       } else {
         await loadDatasets();
-        toast.success("Job completed.");
+        toast.success(payload?.message || "Job completed.");
       }
 
       setActiveJobId(null);
@@ -325,6 +340,51 @@ export default function DatasetPage() {
 
       const jobId = String(payload.jobId ?? "");
       if (!jobId) throw new Error("Missing job id from upload response");
+
+      // Sync register path returns completed immediately (no long background retrain).
+      if (payload.status === "completed") {
+        const result = payload?.result ?? {};
+        const newDatasetId = result?.newDatasetId as string | undefined;
+        const previousDatasetId = result?.previousDatasetId as string | undefined;
+        setUploadResult({
+          rows: result?.rows ?? payload?.rows ?? 0,
+          totalRows: result?.totalRows,
+          fileName: file.name,
+          newDatasetId,
+          previousDatasetId,
+          retrained: Boolean(result?.retrained),
+          refreshed: Boolean(result?.predictionsRefreshed),
+        });
+        setPreprocessingReport(
+          (result?.preprocessingReport as Record<string, unknown>) ?? null,
+        );
+        const refreshed = await loadDatasets();
+        if (
+          previousDatasetId &&
+          newDatasetId &&
+          previousDatasetId !== newDatasetId
+        ) {
+          const prev = refreshed.find((d) => d.id === previousDatasetId);
+          setPreviousPrompt({
+            previousId: previousDatasetId,
+            previousName: prev?.originalName ?? previousDatasetId,
+            isBaseline: Boolean(prev?.isBaseline),
+          });
+        }
+        setActiveJobId(null);
+        localStorage.removeItem("datasetUploadJobId");
+        setJobStatus({
+          status: "completed",
+          progress: 100,
+          message: payload.message,
+        });
+        toast.success(
+          result?.retrained
+            ? "Dataset registered and model retrained."
+            : "Dataset uploaded successfully.",
+        );
+        return;
+      }
 
       setActiveJobId(jobId);
       localStorage.setItem("datasetUploadJobId", jobId);
