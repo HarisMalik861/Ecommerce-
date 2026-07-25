@@ -16,6 +16,7 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import { toast } from "sonner";
+import { authFetch, getPublicBackendUrl } from "@/lib/auth-fetch";
 
 const REQUIRED_COLUMNS = [
   "Product_Name",
@@ -93,11 +94,32 @@ export default function DatasetPage() {
 
   const columnsPreview = useMemo(() => REQUIRED_COLUMNS.join(", "), []);
 
+  /** Prefer direct Render calls for large CSVs (Vercel body limit ~4.5MB). */
+  const datasetApi = useCallback((path: string) => {
+    const backend = getPublicBackendUrl();
+    if (backend) return `${backend}${path}`;
+    // Local / fallback through Next.js BFF
+    if (path.startsWith("/v1/admin/datasets/upload")) {
+      return "/api/admin/dataset/upload";
+    }
+    if (path.startsWith("/v1/admin/jobs/")) {
+      const jobId = path.split("/").pop() || "";
+      return `/api/admin/dataset/upload?jobId=${encodeURIComponent(jobId)}`;
+    }
+    if (path === "/v1/admin/datasets") return "/api/admin/dataset/list";
+    if (path.includes("/activate")) {
+      return "/api/admin/dataset/active";
+    }
+    if (path.startsWith("/v1/admin/datasets/")) {
+      const id = path.split("/").pop() || "";
+      return `/api/admin/dataset/${encodeURIComponent(id)}`;
+    }
+    return path;
+  }, []);
+
   const loadDatasets = useCallback(async (): Promise<DatasetItem[]> => {
     try {
-      const response = await fetch("/api/admin/dataset/list", {
-        credentials: "include",
-      });
+      const response = await authFetch(datasetApi("/v1/admin/datasets"));
       const payload = await response.json();
       if (!response.ok) {
         throw new Error(payload?.error || "Failed to load datasets");
@@ -114,15 +136,11 @@ export default function DatasetPage() {
     } finally {
       setDatasetsLoading(false);
     }
-  }, []);
+  }, [datasetApi]);
 
   const pollJobStatus = async (jobId: string) => {
-    const response = await fetch(
-      `/api/admin/dataset/upload?jobId=${encodeURIComponent(jobId)}`,
-      {
-        method: "GET",
-        credentials: "include",
-      },
+    const response = await authFetch(
+      datasetApi(`/v1/admin/jobs/${encodeURIComponent(jobId)}`),
     );
     const payload = await response.json();
     if (!response.ok) {
@@ -244,22 +262,25 @@ export default function DatasetPage() {
       formData.append("dataset", file);
       formData.append("deduplicate", deduplicateOnUpload ? "true" : "false");
 
-      const response = await fetch("/api/admin/dataset/upload", {
-        method: "POST",
-        credentials: "include",
-        body: formData,
-      });
+      // Upload straight to Render to avoid Vercel request size limits.
+      const response = await authFetch(
+        datasetApi("/v1/admin/datasets/upload"),
+        {
+          method: "POST",
+          body: formData,
+        },
+      );
 
       const payload = await response.json();
       if (!response.ok) {
         setUploadError({
-          message: payload?.error || "Upload failed",
+          message: payload?.error || payload?.detail || "Upload failed",
           missingColumns: payload?.missingColumns,
           extraColumns: payload?.extraColumns,
           details: payload?.details,
           expectedColumns: payload?.expectedColumns,
         });
-        toast.error(payload?.error || "Upload failed");
+        toast.error(payload?.error || payload?.detail || "Upload failed");
         return;
       }
 
@@ -285,15 +306,20 @@ export default function DatasetPage() {
     if (datasetId === activeId) return;
     setActivatingId(datasetId);
     try {
-      const response = await fetch("/api/admin/dataset/active", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: datasetId }),
-      });
+      const backend = getPublicBackendUrl();
+      const response = await authFetch(
+        backend
+          ? `${backend}/v1/admin/datasets/${encodeURIComponent(datasetId)}/activate`
+          : "/api/admin/dataset/active",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: backend ? undefined : JSON.stringify({ id: datasetId }),
+        },
+      );
       const payload = await response.json();
       if (!response.ok) {
-        toast.error(payload?.error || "Failed to activate dataset");
+        toast.error(payload?.error || payload?.detail || "Failed to activate dataset");
         return;
       }
 
@@ -321,16 +347,13 @@ export default function DatasetPage() {
   const onDeleteDataset = async (datasetId: string) => {
     setDeletingId(datasetId);
     try {
-      const response = await fetch(
-        `/api/admin/dataset/${encodeURIComponent(datasetId)}`,
-        {
-          method: "DELETE",
-          credentials: "include",
-        },
+      const response = await authFetch(
+        datasetApi(`/v1/admin/datasets/${encodeURIComponent(datasetId)}`),
+        { method: "DELETE" },
       );
       const payload = await response.json();
       if (!response.ok) {
-        toast.error(payload?.error || "Failed to delete dataset");
+        toast.error(payload?.error || payload?.detail || "Failed to delete dataset");
         return;
       }
       toast.success("Dataset deleted.");
@@ -348,9 +371,8 @@ export default function DatasetPage() {
   const onDownloadSample = async () => {
     setIsDownloadingSample(true);
     try {
-      const response = await fetch("/api/admin/dataset/sample", {
+      const response = await authFetch("/api/admin/dataset/sample", {
         method: "GET",
-        credentials: "include",
       });
       if (!response.ok) {
         const payload = await response.json();

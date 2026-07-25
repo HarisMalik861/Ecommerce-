@@ -309,7 +309,7 @@ def _parse_csv(content: str) -> list[list[str]]:
 
 
 def _validate_header(header: list[str]) -> dict[str, Any]:
-    normalized = [h.strip() for h in header]
+    normalized = [h.strip().lstrip("\ufeff") for h in header]
     missing = [col for col in REQUIRED_COLUMNS if col not in normalized]
     extra = [col for col in normalized if col not in REQUIRED_COLUMNS]
     has_exact_order = len(normalized) == len(REQUIRED_COLUMNS) and all(
@@ -358,7 +358,8 @@ async def upload_dataset(
         return JSONResponse({"error": "Only CSV files are allowed."}, status_code=400)
 
     content_bytes = await dataset.read()
-    content = content_bytes.decode("utf-8", errors="replace")
+    # utf-8-sig strips Excel/Windows BOM so Product_Name is not "\ufeffProduct_Name"
+    content = content_bytes.decode("utf-8-sig", errors="replace")
     if not content.strip():
         return JSONResponse({"error": "Uploaded file is empty."}, status_code=400)
 
