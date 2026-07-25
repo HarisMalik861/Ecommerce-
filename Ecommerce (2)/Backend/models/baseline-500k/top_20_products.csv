@@ -1,0 +1,21 @@
+Product_Name,Category,Gender,Color,Sleeve_Type,Material,Month,Year,City,Price,Discount_Pct,Is_Flash_Sale,Is_Combo,Sales,Predicted_Future_Sales,Sales_Potential_Score,Sales_Potential_Category,Growth_Potential,Growth_Percentage
+Crew Socks,Socks,Male,Blue,Not Specified,Cotton,Dec,2024,Karachi,90.86,58.2,1,1,72852,39750.26,100.0,High Potential,-33101.74,-45.436968099709
+Sports Socks,Socks,Female,Red,Not Specified,Spandex,Dec,2023,Lahore,107.74,64.7,1,1,52713,31763.49,99.99980000000001,High Potential,-20949.51,-39.74258721757441
+Thermal Socks,Socks,Male,White,Not Specified,Polyester,Dec,2022,Karachi,101.91,37.7,1,1,28146,29344.31,99.9996,High Potential,1198.3100000000013,4.257478860228812
+Ankle Socks,Socks,Male,Blue,Not Specified,Wool,Jan,2024,Karachi,99.31,18.8,1,1,26647,26782.55,99.9988,High Potential,135.54999999999927,0.5086876571471434
+No-Show Socks,Socks,Unisex,Brown,Not Specified,Cotton,Feb,2025,Lahore,91.29,45.6,1,0,24725,26734.37,99.99860000000001,High Potential,2009.369999999999,8.126875631951462
+Athletic Socks,Socks,Female,White,Not Specified,Cotton,Dec,2024,Karachi,98.55,31.2,1,0,28509,25104.21,99.99759999999999,High Potential,-3404.790000000001,-11.9428601494265
+Woolen Winter Socks,Socks,Female,Blue,Not Specified,Wool,Jan,2024,Karachi,159.65,53.9,1,1,16611,24616.61,99.9968,High Potential,8005.610000000001,48.19463006441515
+Round Neck,T-Shirt,Unisex,Black,Half Sleeve,Cotton,Jun,2025,Karachi,324.14,64.7,1,0,18483,13654.93,99.935,High Potential,-4828.07,-26.12167938105286
+Plain,T-Shirt,Male,Black,Half Sleeve,Polyester,Aug,2024,Lahore,287.17,64.2,1,0,21923,13231.5,99.9256,High Potential,-8691.5,-39.64557770378141
+Polo,T-Shirt,Female,Brown,Full Sleeve,Polyester,Jun,2025,Lahore,314.28,63.7,1,0,14043,13023.18,99.92,High Potential,-1019.8199999999997,-7.262123477889338
+Casual,T-Shirt,Female,Blue,Half Sleeve,Cotton,Jul,2024,Karachi,632.0,64.9,1,1,13503,11920.16,99.8864,High Potential,-1582.8400000000001,-11.722135821669259
+Oversized,T-Shirt,Unisex,Blue,Full Sleeve,Cotton,Jul,2024,Lahore,398.59,59.0,1,0,17323,11890.25,99.8854,High Potential,-5432.75,-31.361484731282115
+Denim Shorts,Shorts,Unisex,Brown,Not Specified,Cotton,Jul,2023,Karachi,336.45,45.8,1,1,10790,10218.98,99.7948,High Potential,-571.0200000000004,-5.292122335495834
+Printed,T-Shirt,Male,Maroon,Half Sleeve,Cotton,Aug,2025,Lahore,607.15,23.8,1,1,8312,8810.17,99.6562,High Potential,498.1700000000001,5.993383060635226
+Beach Shorts,Shorts,Male,Blue,Not Specified,Polyester,Jun,2024,Karachi,339.77,40.0,1,0,14945,8740.27,99.64739999999999,High Potential,-6204.73,-41.51709601873536
+V-Neck,T-Shirt,Unisex,Blue,Full Sleeve,Polyester,Jul,2024,Karachi,489.31,34.3,1,0,7133,8661.71,99.63680000000001,High Potential,1528.7099999999991,21.43151549137809
+Graphic Tee,T-Shirt,Male,Black,Full Sleeve,Cotton,Jul,2025,Gujranwala,427.26,42.0,1,1,12011,8400.7,99.6,High Potential,-3610.2999999999993,-30.05827991008242
+Running Shorts,Shorts,Female,Green,Not Specified,Linen,Jun,2022,Karachi,366.94,37.2,1,0,8302,7626.18,99.45819999999999,High Potential,-675.8199999999997,-8.140448084798841
+Athletic Shorts,Shorts,Female,Grey,Not Specified,Polyester,Jul,2024,Karachi,533.34,16.4,1,1,9035,7591.86,99.452,High Potential,-1443.1400000000003,-15.97277255118982
+Board Shorts,Shorts,Female,Navy,Not Specified,Polyester,Aug,2022,Karachi,375.85,39.1,1,0,7249,7258.71,99.3696,High Potential,9.710000000000036,0.13394951027728014

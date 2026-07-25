@@ -1,0 +1,21 @@
+[
+  "Price",
+  "Log_Price",
+  "Discount_Pct",
+  "Discounted_Price",
+  "Value_Score",
+  "Price_Discount_Interaction",
+  "Is_Combo",
+  "Is_Flash_Sale",
+  "Combo_Discount_Interaction",
+  "Category_Encoded",
+  "Month_Encoded",
+  "Year_Encoded",
+  "City_Encoded",
+  "Gender_Encoded",
+  "Color_Encoded",
+  "Sleeve_Type_Encoded",
+  "Material_Encoded",
+  "Price_Category_Encoded",
+  "Discount_Category_Encoded"
+]

@@ -1,0 +1,25 @@
+# Render Blueprint — ML Backend (Python FastAPI)
+# Docs: https://render.com/docs/blueprint-spec
+#
+# After first deploy:
+# 1. Attach a persistent disk at /opt/render/project/src/Backend (or mount path
+#    that preserves datasets/, models/, and prediction CSVs across deploys).
+# 2. Copy baseline CSVs/models onto the disk on first boot if empty.
+# 3. Set BACKEND_API_KEY in the dashboard (same value as Vercel).
+
+services:
+  - type: web
+    name: ecommerce-ml-api
+    runtime: python
+    plan: free
+    rootDir: Backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: BACKEND_API_KEY
+        sync: false
+      - key: PYTHONUNBUFFERED
+        value: "1"

@@ -1,0 +1,14 @@
+{
+  "status": "completed",
+  "progress": 100,
+  "message": "Active dataset switched (cached model loaded)",
+  "datasetId": "b84cd3217db04cda9e15255359e90992",
+  "createdAt": "2026-06-13T06:09:44.741Z",
+  "result": {
+    "activeId": "b84cd3217db04cda9e15255359e90992",
+    "previousDatasetId": "baseline-500k",
+    "retrained": false,
+    "predictionsRefreshed": false,
+    "usedCache": true
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "activeId": "baseline-500k",
+  "datasets": [
+    {
+      "id": "baseline-500k",
+      "fileName": "daraz_multicategory_pakistan_500k.csv",
+      "originalName": "daraz_multicategory_pakistan_500k.csv",
+      "rows": 500006,
+      "sizeBytes": 63112261,
+      "isBaseline": true,
+      "uploadedAt": "2026-05-24T09:42:18.785677+00:00"
+    },
+    {
+      "id": "21c4925976404161b3167de8bf745407",
+      "fileName": "21c4925976404161b3167de8bf745407.csv",
+      "originalName": "dataset_sample (1).csv",
+      "rows": 3,
+      "sizeBytes": 509,
+      "isBaseline": false,
+      "uploadedAt": "2026-05-24T10:08:52.355806+00:00"
+    },
+    {
+      "id": "b84cd3217db04cda9e15255359e90992",
+      "fileName": "b84cd3217db04cda9e15255359e90992.csv",
+      "originalName": "daraz_multicategory_pakistan_300k.csv",
+      "rows": 300000,
+      "sizeBytes": 37870758,
+      "isBaseline": false,
+      "uploadedAt": "2026-06-12T19:18:17.719096+00:00"
+    },
+    {
+      "id": "17026039e0dc4b739c47e499c978cdec",
+      "fileName": "17026039e0dc4b739c47e499c978cdec.csv",
+      "originalName": "daraz_multicategory_pakistan_200k.csv",
+      "rows": 200000,
+      "sizeBytes": 25242937,
+      "isBaseline": false,
+      "uploadedAt": "2026-06-12T19:20:12.820932+00:00"
+    }
+  ]
+}

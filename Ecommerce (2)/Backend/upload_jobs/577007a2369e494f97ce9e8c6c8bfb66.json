@@ -1,0 +1,9 @@
+{
+  "status": "failed",
+  "progress": 100,
+  "message": "cannot access local variable 'set_active' where it is not associated with a value",
+  "fileName": "dataset_sample (1).csv",
+  "rows": 3,
+  "deduplicate": false,
+  "createdAt": "2026-05-24T09:54:51.917Z"
+}

@@ -13,3 +13,21 @@ Backend/.venv/
 deploy/cloudflare/cf-state/
 deploy/cloudflare/config.yml
 deploy/cloudflare/cloudflared.exe
+
+# Nested app ignores (after submodule flatten)
+Ecommerce (2)/Frontend/node_modules/
+Ecommerce (2)/Frontend/.next/
+Ecommerce (2)/Frontend/.env
+Ecommerce (2)/Frontend/.env.*
+Ecommerce (2)/Backend/.venv/
+Ecommerce (2)/Backend/__pycache__/
+Ecommerce (2)/Backend/**/__pycache__/
+Ecommerce (2)/Backend/*.lnk
+Ecommerce (2)/deploy/cloudflare/cf-state/
+
+# Generated / local-only
+**/__pycache__/
+**/*.pyc
+**/*.lnk
+Backend/upload_jobs/*.csv
+Backend/upload_jobs/*.json
