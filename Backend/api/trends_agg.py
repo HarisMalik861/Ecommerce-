@@ -458,7 +458,8 @@ def rebuild_caches_for_active_dataset() -> dict[str, Any]:
     if not csv_path.is_file():
         raise FileNotFoundError(f"Active dataset CSV missing: {csv_path}")
 
-    # Per-category accumulators (constant memory) + product rollups for dashboard.
+    # Per-category accumulators only (constant memory). Never load the 76MB
+    # prediction CSV here — that OOMs Render free and takes the API down.
     cat_month: dict[str, dict[str, dict[str, float]]] = {
         cat: {} for cat in CATEGORY_TO_SLUG
     }
@@ -475,11 +476,12 @@ def rebuild_caches_for_active_dataset() -> dict[str, Any]:
         cat: defaultdict(float) for cat in CATEGORY_TO_SLUG
     }
     cat_years: dict[str, list[int]] = {cat: [] for cat in CATEGORY_TO_SLUG}
-    products: dict[str, dict[str, Any]] = {}
+    # Track only a small top-product map for the dashboard pie chart.
+    top_products: dict[str, dict[str, Any]] = {}
     total_rows = 0
-    max_tracked_products = int(
-        __import__("os").environ.get("TRENDS_MAX_TRACKED_PRODUCTS", "40000")
-    )
+    file_size = csv_path.stat().st_size
+    track_products = file_size <= 12 * 1024 * 1024  # skip on very large CSVs
+    max_tracked_products = 2500
 
     with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
@@ -490,11 +492,8 @@ def rebuild_caches_for_active_dataset() -> dict[str, Any]:
             total_rows += 1
             month = (row.get("Month") or "Unknown").strip()
             sales = _parse_number(row.get("Sales"))
-            # Proxy forecast: keep historical scale so charts update with the
-            # active dataset even when XGBoost retrain was skipped.
             predicted = sales
             price = _parse_number(row.get("Price"))
-            product_name = (row.get("Product_Name") or "Unknown Product").strip()
 
             month_bucket = cat_month[category].setdefault(
                 month,
@@ -515,24 +514,32 @@ def rebuild_caches_for_active_dataset() -> dict[str, Any]:
 
             year_raw = _parse_number(row.get("Year"), float("nan"))
             if not math.isnan(year_raw):
-                cat_years[category].append(int(year_raw))
+                # Keep bounds only (not every year value) to save RAM.
+                years = cat_years[category]
+                year_i = int(year_raw)
+                if not years:
+                    cat_years[category] = [year_i, year_i]
+                else:
+                    years[0] = min(years[0], year_i)
+                    years[1] = max(years[1], year_i)
 
-            product_key = product_name.lower()
-            existing = products.get(product_key)
-            if existing is None:
-                if len(products) >= max_tracked_products:
-                    continue
-                products[product_key] = {
-                    "name": product_name,
-                    "category": category,
-                    "sales": sales,
-                    "predicted": predicted,
-                    "rows": 1,
-                }
-            else:
-                existing["sales"] += sales
-                existing["predicted"] += predicted
-                existing["rows"] += 1
+            if track_products:
+                product_name = (row.get("Product_Name") or "Unknown Product").strip()
+                product_key = product_name.lower()
+                existing = top_products.get(product_key)
+                if existing is None:
+                    if len(top_products) < max_tracked_products:
+                        top_products[product_key] = {
+                            "name": product_name,
+                            "category": category,
+                            "sales": sales,
+                            "predicted": predicted,
+                            "rows": 1,
+                        }
+                else:
+                    existing["sales"] += sales
+                    existing["predicted"] += predicted
+                    existing["rows"] += 1
 
     category_cache: dict[str, Any] = {"datasetId": active_id}
     for category, slug in CATEGORY_TO_SLUG.items():
@@ -577,8 +584,8 @@ def rebuild_caches_for_active_dataset() -> dict[str, Any]:
         insights.append(f"{total_products:,} products in dataset")
         years = cat_years[category]
         if years:
-            min_year = min(years)
-            max_year = max(years)
+            min_year = years[0]
+            max_year = years[-1]
             insights.append(f"Historical data: {min_year}–{max_year}")
             insights.append(f"Forecast target year: {max_year + 1}")
         insights.append("Trends rebuilt from active dataset (historical proxy).")
@@ -597,32 +604,48 @@ def rebuild_caches_for_active_dataset() -> dict[str, Any]:
             },
         }
 
-    # Prefer full prediction-CSV dashboard for baseline when artifacts exist.
-    predictions_path = BACKEND_DIR / "future_sales_predictions.csv"
-    top20_path = BACKEND_DIR / "top_20_products.csv"
+    trends_cache_path = BACKEND_DIR / "trends_cache.json"
     trends_payload: dict[str, Any] | None = None
-    if (
-        active_id == "baseline-500k"
-        and predictions_path.is_file()
-        and top20_path.is_file()
-    ):
+
+    # Baseline: reuse the committed dashboard cache when it still looks healthy.
+    # Do NOT call build_trends_payload() here — loading prediction CSVs OOMs free tier.
+    if active_id == "baseline-500k" and trends_cache_path.is_file():
         try:
-            trends_payload = build_trends_payload(refresh=False)
-            trends_payload["datasetId"] = active_id
-            trends_payload["source"] = "prediction_csv"
+            existing = json.loads(trends_cache_path.read_text(encoding="utf-8"))
+            if (
+                isinstance(existing, dict)
+                and existing.get("trendData")
+                and existing.get("trendCategories")
+                and float((existing.get("summary") or {}).get("accuracy") or 0) > 0
+            ):
+                existing["datasetId"] = active_id
+                existing["source"] = existing.get("source") or "committed_cache"
+                trends_payload = existing
         except Exception as exc:
-            print(f"warning: baseline prediction dashboard rebuild failed: {exc}")
-            trends_payload = None
+            print(f"warning: could not reuse baseline trends cache: {exc}")
 
     if trends_payload is None:
+        product_rows = list(top_products.values())
+        if not product_rows:
+            # Fallback pie/segments from category totals (always available).
+            product_rows = [
+                {
+                    "name": cat,
+                    "category": cat,
+                    "sales": float(vals.get("sales") or 0),
+                    "predicted": float(vals.get("predicted") or 0),
+                    "rows": int(vals.get("products") or 0),
+                }
+                for cat, vals in cat_totals.items()
+                if float(vals.get("sales") or 0) > 0
+            ]
         trends_payload = _build_dashboard_payload_from_products(
             active_id=active_id,
             total_rows=total_rows,
-            products=list(products.values()),
+            products=product_rows,
             cat_totals=cat_totals,
         )
 
-    trends_cache_path = BACKEND_DIR / "trends_cache.json"
     category_cache_path = BACKEND_DIR / "category_trends_cache.json"
     trends_cache_path.write_text(json.dumps(trends_payload), encoding="utf-8")
     category_cache_path.write_text(json.dumps(category_cache), encoding="utf-8")
