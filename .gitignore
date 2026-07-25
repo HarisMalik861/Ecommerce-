@@ -32,4 +32,14 @@ Ecommerce (2)/deploy/cloudflare/cf-state/
 Backend/upload_jobs/*.csv
 Backend/upload_jobs/*.json
 
+# Runtime uploads on Render (do not re-ship deleted datasets via git)
+Backend/datasets/*
+!Backend/datasets/registry.json
+!Backend/datasets/baseline-500k.csv
+Backend/models/*
+!Backend/models/baseline-500k/
+
 .deploy-secrets.local.json
+
+Backend/daraz_multicategory_pakistan_200k.csv
+Backend/daraz_multicategory_pakistan_300k.csv
