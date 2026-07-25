@@ -151,12 +151,16 @@ async def predict_generic_top(payload: dict[str, Any]) -> JSONResponse:
 
 @app.get("/v1/dataset/options", dependencies=[Depends(require_api_key)])
 async def dataset_options(category: str = "") -> JSONResponse:
-    args = [category] if category.strip() else []
-    result = run_script("dataset_options.py", args, timeout=120)
-    err = _error_response(result)
-    if err:
-        return err
-    return JSONResponse(result)
+    try:
+        from dataset_options import build_options
+
+        payload = build_options(category.strip() or None, use_cache=True)
+        return JSONResponse(
+            payload,
+            headers={"Cache-Control": "private, no-store"},
+        )
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 @app.get("/v1/trends", dependencies=[Depends(require_api_key)])
@@ -211,9 +215,7 @@ async def trends(refresh: bool = False) -> JSONResponse:
 
         return JSONResponse(
             payload,
-            headers={
-                "Cache-Control": "public, max-age=10, stale-while-revalidate=30",
-            },
+            headers={"Cache-Control": "private, no-store"},
         )
     except Exception as exc:  # noqa: BLE001
         return JSONResponse({"error": str(exc)}, status_code=500)
@@ -238,9 +240,7 @@ async def trends_category(category_id: str) -> JSONResponse:
             if cache_matches and category_id in cached:
                 return JSONResponse(
                     cached[category_id],
-                    headers={
-                        "Cache-Control": "public, max-age=10, stale-while-revalidate=30",
-                    },
+                    headers={"Cache-Control": "private, no-store"},
                 )
             if not cache_matches:
                 try:
@@ -249,9 +249,7 @@ async def trends_category(category_id: str) -> JSONResponse:
                     if category_id in cached:
                         return JSONResponse(
                             cached[category_id],
-                            headers={
-                                "Cache-Control": "public, max-age=10, stale-while-revalidate=30",
-                            },
+                            headers={"Cache-Control": "private, no-store"},
                         )
                 except Exception:
                     pass
@@ -261,9 +259,7 @@ async def trends_category(category_id: str) -> JSONResponse:
             payload["datasetId"] = active_id
         return JSONResponse(
             payload,
-            headers={
-                "Cache-Control": "public, max-age=10, stale-while-revalidate=30",
-            },
+            headers={"Cache-Control": "private, no-store"},
         )
     except KeyError:
         return JSONResponse({"error": "Unknown category"}, status_code=404)

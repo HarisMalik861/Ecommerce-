@@ -17,7 +17,10 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { authFetch, getPublicBackendUrl } from "@/lib/auth-fetch";
-import { clearTrendsClientCaches } from "@/lib/client-cache";
+import {
+  clearTrendsClientCaches,
+  setActiveDatasetId,
+} from "@/lib/client-cache";
 
 const REQUIRED_COLUMNS = [
   "Product_Name",
@@ -138,6 +141,9 @@ export default function DatasetPage() {
         : [];
       setDatasets(items);
       setActiveId(payload.activeId ?? null);
+      if (payload.activeId) {
+        setActiveDatasetId(String(payload.activeId));
+      }
       return items;
     } catch {
       toast.error("Could not load dataset list");
@@ -215,14 +221,14 @@ export default function DatasetPage() {
             isBaseline: Boolean(prev?.isBaseline),
           });
         }
-        clearTrendsClientCaches();
+        clearTrendsClientCaches(newDatasetId ?? null);
         toast.success(
           result?.retrained
             ? "Dataset registered and model retrained."
             : "Dataset uploaded successfully.",
         );
       } else if (activatedId) {
-        clearTrendsClientCaches();
+        clearTrendsClientCaches(activatedId);
         await loadDatasets();
         toast.success(
           payload?.message || "Active dataset switched. Trends refreshed.",
@@ -371,7 +377,7 @@ export default function DatasetPage() {
           progress: 100,
           message: payload.message,
         });
-        clearTrendsClientCaches();
+        clearTrendsClientCaches(newDatasetId ?? null);
         toast.success(
           result?.retrained
             ? "Dataset registered and model retrained."
@@ -417,7 +423,9 @@ export default function DatasetPage() {
       }
 
       const jobId = String(payload.jobId ?? "");
-      clearTrendsClientCaches();
+      const activated =
+        String(payload?.result?.activeId ?? datasetId ?? "");
+      clearTrendsClientCaches(activated || datasetId);
       await loadDatasets();
 
       if (payload.status === "completed") {

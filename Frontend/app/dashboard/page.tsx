@@ -6,7 +6,12 @@ import { TrendingUp, BarChart3, Lightbulb, Users } from "lucide-react";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import dynamic from "next/dynamic";
-import { getClientCache, setClientCache } from "@/lib/client-cache";
+import {
+  getActiveDatasetId,
+  getClientCache,
+  setActiveDatasetId,
+  setClientCache,
+} from "@/lib/client-cache";
 import { PageHeader } from "@/components/page-shell";
 import { Button } from "@/components/ui/button";
 
@@ -27,6 +32,7 @@ const DashboardCharts = dynamic(
 );
 
 interface TrendData {
+  datasetId?: string;
   trendData: any[];
   trendCategories: any[];
   predictions: any[];
@@ -47,21 +53,32 @@ interface TrendData {
 export default function DashboardPage() {
   const [data, setData] = useState<TrendData | null>(null);
   const [loading, setLoading] = useState(true);
-  const CACHE_KEY = "dashboard_trends_v3";
   const CACHE_TTL_MS = 15_000;
 
   useEffect(() => {
     const fetchTrends = async () => {
-      const cached = getClientCache<TrendData>(CACHE_KEY);
-      if (cached) {
+      const activeId = getActiveDatasetId();
+      const cacheKey = `dashboard_trends_v4_${activeId || "unknown"}`;
+      const cached = getClientCache<TrendData>(cacheKey);
+      // Only reuse cache when it belongs to the currently active dataset.
+      if (cached && (!activeId || cached.datasetId === activeId)) {
         setData(cached);
         setLoading(false);
+      } else {
+        setData(null);
+        setLoading(true);
       }
       try {
-        const response = await fetch("/api/trends");
-        const trendData = await response.json();
+        const response = await fetch(`/api/trends?ts=${Date.now()}`, {
+          cache: "no-store",
+        });
+        const trendData = (await response.json()) as TrendData;
+        if (trendData?.datasetId) {
+          setActiveDatasetId(trendData.datasetId);
+        }
         setData(trendData);
-        setClientCache(CACHE_KEY, trendData, CACHE_TTL_MS);
+        const key = `dashboard_trends_v4_${trendData.datasetId || getActiveDatasetId() || "unknown"}`;
+        setClientCache(key, trendData, CACHE_TTL_MS);
       } catch (error) {
         console.error("[v0] Failed to fetch trends:", error);
       } finally {

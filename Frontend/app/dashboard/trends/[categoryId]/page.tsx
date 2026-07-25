@@ -28,7 +28,12 @@ import {
 } from "recharts";
 import { useParams } from "next/navigation";
 import dynamic from "next/dynamic";
-import { getClientCache, setClientCache } from "@/lib/client-cache";
+import {
+  getActiveDatasetId,
+  getClientCache,
+  setActiveDatasetId,
+  setClientCache,
+} from "@/lib/client-cache";
 import { toast } from "sonner";
 import { useAuth } from "@/lib/auth-context";
 import { buildPredictionInsight } from "@/lib/prediction-insight";
@@ -880,12 +885,59 @@ export default function CategoryDetailPage() {
     let cancelled = false;
     const loadDatasetOptions = async () => {
       try {
+        const activeId = getActiveDatasetId();
+        const optionsCacheKey = `dataset_options_${activeId || "unknown"}_${modelCategory}`;
+        const cachedOptions = getClientCache<{
+          datasetId?: string;
+          productNames?: string[];
+          cities?: string[];
+          gender?: string[];
+          color?: string[];
+          sleeveType?: string[];
+          material?: string[];
+          ranges?: {
+            price?: { min?: number; max?: number };
+            discountPct?: { min?: number; max?: number };
+          };
+          years?: number[];
+          months?: string[];
+          forecastYear?: number;
+          datasetYearMin?: number;
+          datasetYearMax?: number;
+        }>(optionsCacheKey);
+        if (
+          cachedOptions &&
+          (!activeId || cachedOptions.datasetId === activeId) &&
+          Array.isArray(cachedOptions.productNames)
+        ) {
+          // Apply cached options immediately, then refresh in background.
+          const productNames = cachedOptions.productNames || [];
+          setDatasetOptions((prev) => ({
+            ...prev,
+            productNames,
+            cities: cachedOptions.cities?.length
+              ? cachedOptions.cities
+              : prev.cities,
+            gender: cachedOptions.gender?.length
+              ? cachedOptions.gender
+              : prev.gender,
+            color: cachedOptions.color?.length ? cachedOptions.color : prev.color,
+            sleeveType: cachedOptions.sleeveType?.length
+              ? cachedOptions.sleeveType
+              : prev.sleeveType,
+            material: cachedOptions.material?.length
+              ? cachedOptions.material
+              : prev.material,
+          }));
+        }
+
         const response = await fetch(
-          `/api/trends/options?category=${encodeURIComponent(modelCategory)}`,
-          { credentials: "include" },
+          `/api/trends/options?category=${encodeURIComponent(modelCategory)}&ts=${Date.now()}`,
+          { credentials: "include", cache: "no-store" },
         );
         if (!response.ok) return;
         const payload = (await response.json()) as {
+          datasetId?: string;
           productNames?: string[];
           cities?: string[];
           gender?: string[];
@@ -903,6 +955,9 @@ export default function CategoryDetailPage() {
           datasetYearMax?: number;
         };
         if (cancelled) return;
+        if (payload.datasetId) {
+          setActiveDatasetId(payload.datasetId);
+        }
 
         const productNames = Array.isArray(payload.productNames)
           ? payload.productNames
@@ -943,7 +998,7 @@ export default function CategoryDetailPage() {
         const datasetYearMin = Number(payload.datasetYearMin);
         const datasetYearMax = Number(payload.datasetYearMax);
 
-        setDatasetOptions({
+        const nextOptions = {
           productNames,
           cities,
           gender,
@@ -973,7 +1028,13 @@ export default function CategoryDetailPage() {
           datasetYearMax: Number.isFinite(datasetYearMax)
             ? datasetYearMax
             : (years.length > 0 ? Math.max(...years) : 2025),
-        });
+        };
+        setDatasetOptions(nextOptions);
+        setClientCache(
+          `dataset_options_${payload.datasetId || activeId || "unknown"}_${modelCategory}`,
+          { datasetId: payload.datasetId, ...nextOptions },
+          10 * 60_000,
+        );
         setPredictionForm((prev) => ({
           ...prev,
           productName:
@@ -999,22 +1060,46 @@ export default function CategoryDetailPage() {
 
   useEffect(() => {
     const fetchCategoryTrends = async () => {
-      const cacheKey = `category_trends_${categoryId}`;
-      const cached = getClientCache<CategoryTrendResponse>(cacheKey);
-      if (cached) {
+      const activeId = getActiveDatasetId();
+      const cacheKey = `category_trends_${activeId || "unknown"}_${categoryId}`;
+      const cached = getClientCache<CategoryTrendResponse & { datasetId?: string }>(
+        cacheKey,
+      );
+      if (cached && (!activeId || cached.datasetId === activeId)) {
         setCategoryTrends(cached);
         setCategoryLoading(false);
       } else {
         setCategoryTrends(null);
+        setCategoryLoading(true);
       }
       try {
-        const response = await fetch(`/api/trends/${categoryId}`);
+        const response = await fetch(
+          `/api/trends/${categoryId}?ts=${Date.now()}`,
+          { cache: "no-store" },
+        );
         if (!response.ok) {
           return;
         }
-        const payload = (await response.json()) as CategoryTrendResponse;
+        const payload = (await response.json()) as CategoryTrendResponse & {
+          datasetId?: string;
+        };
+        const latestActive = getActiveDatasetId();
+        if (
+          latestActive &&
+          payload.datasetId &&
+          payload.datasetId !== latestActive
+        ) {
+          return;
+        }
+        if (payload.datasetId) {
+          setActiveDatasetId(payload.datasetId);
+        }
         setCategoryTrends(payload);
-        setClientCache(cacheKey, payload, 60_000);
+        setClientCache(
+          `category_trends_${payload.datasetId || latestActive || "unknown"}_${categoryId}`,
+          payload,
+          60_000,
+        );
       } catch (error) {
         console.error("Failed to fetch category trends", error);
       } finally {

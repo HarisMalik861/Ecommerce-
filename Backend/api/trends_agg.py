@@ -483,6 +483,20 @@ def rebuild_caches_for_active_dataset() -> dict[str, Any]:
     total_rows = 0
     total_sales_all = 0.0
 
+    # Build prediction-form option caches in the same pass (avoids a second
+    # full CSV scan during activate).
+    from dataset_options import (
+        KNOWN_CATEGORIES,
+        _absorb_row,
+        _empty_bucket,
+        _finalize_bucket,
+        _write_cache,
+    )
+
+    options_all = _empty_bucket()
+    options_by_cat = {cat: _empty_bucket() for cat in KNOWN_CATEGORIES}
+    options_categories: set[str] = set()
+
     with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
         for row in reader:
@@ -531,6 +545,12 @@ def rebuild_caches_for_active_dataset() -> dict[str, Any]:
                 k = random.randint(0, total_rows - 1)
                 if k < sample_limit:
                     sales_sample[k] = sales
+
+            if category:
+                options_categories.add(category)
+            _absorb_row(options_all, row)
+            if category in options_by_cat:
+                _absorb_row(options_by_cat[category], row)
 
     category_cache: dict[str, Any] = {"datasetId": active_id}
     for category, slug in CATEGORY_TO_SLUG.items():
@@ -628,6 +648,34 @@ def rebuild_caches_for_active_dataset() -> dict[str, Any]:
     trends_cache_path.write_text(json.dumps(trends_payload), encoding="utf-8")
     category_cache_path.write_text(json.dumps(category_cache), encoding="utf-8")
 
+    options_precompute: dict[str, Any] | None = None
+    try:
+        payloads = {
+            "_all": _finalize_bucket(
+                dataset_id=active_id,
+                bucket=options_all,
+                all_categories=options_categories,
+                category=None,
+            )
+        }
+        for cat, bucket in options_by_cat.items():
+            payloads[cat] = _finalize_bucket(
+                dataset_id=active_id,
+                bucket=bucket if bucket["rows"] > 0 else options_all,
+                all_categories=options_categories,
+                category=cat,
+            )
+        for key, payload in payloads.items():
+            _write_cache(active_id, None if key == "_all" else key, payload)
+        options_precompute = {
+            "datasetId": active_id,
+            "cachedCategories": list(payloads.keys()),
+            "productNames": len(payloads["_all"].get("productNames") or []),
+        }
+    except Exception as exc:
+        print(f"warning: options precompute failed: {exc}")
+        options_precompute = {"error": str(exc)}
+
     return {
         "datasetId": active_id,
         "totalRows": total_rows,
@@ -636,6 +684,7 @@ def rebuild_caches_for_active_dataset() -> dict[str, Any]:
             for cat, slug in CATEGORY_TO_SLUG.items()
         },
         "dashboardSource": trends_payload.get("source"),
+        "optionsPrecompute": options_precompute,
     }
 
 
