@@ -150,10 +150,20 @@ async def trends(refresh: bool = False) -> JSONResponse:
         payload: dict[str, Any] | None = None
         if not refresh and cache_path.is_file():
             cached = json.loads(cache_path.read_text(encoding="utf-8"))
-            if isinstance(cached, dict) and (
+            cache_ok = isinstance(cached, dict) and (
                 not active_id or cached.get("datasetId") == active_id
-            ):
-                payload = cached
+            )
+            # Reject broken lightweight caches (zeros everywhere / empty charts).
+            if cache_ok:
+                summary = cached.get("summary") or {}
+                has_chart = bool(cached.get("trendData"))
+                has_segments = bool(cached.get("trendCategories"))
+                looks_broken = (
+                    int(summary.get("totalTrends") or 0) > 0
+                    and (not has_chart or not has_segments or float(summary.get("accuracy") or 0) <= 0)
+                )
+                if not looks_broken:
+                    payload = cached
 
         if payload is None:
             try:
