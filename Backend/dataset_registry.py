@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -108,10 +109,12 @@ def ensure_registry_seeded() -> dict[str, Any]:
 
             if is_enabled():
                 result = hydrate_to_disk()
-                print(f"dataset store hydrate: {result}")
+                # Must use stderr — stdout is reserved for JSON CLI responses
+                # (e.g. predict_new_product_json.py).
+                print(f"dataset store hydrate: {result}", file=sys.stderr)
             _HYDRATED_FROM_STORE = True
         except Exception as exc:
-            print(f"warning: dataset hydrate skipped: {exc}")
+            print(f"warning: dataset hydrate skipped: {exc}", file=sys.stderr)
             _HYDRATED_FROM_STORE = True
 
     registry = _read_registry_raw()
