@@ -446,6 +446,7 @@ def rebuild_caches_for_active_dataset() -> dict[str, Any]:
     pages must still reflect the active dataset (counts, monthly sales, etc.).
     Predicted sales use a light historical proxy when model predictions are stale.
     """
+    import gc
     import sys
 
     backend_dir = str(BACKEND_DIR)
@@ -453,11 +454,59 @@ def rebuild_caches_for_active_dataset() -> dict[str, Any]:
         sys.path.insert(0, backend_dir)
 
     from dataset_registry import get_active_id, get_active_path
+    from dataset_options import _read_cache
 
     active_id = get_active_id()
     csv_path = Path(get_active_path())
     if not csv_path.is_file():
         raise FileNotFoundError(f"Active dataset CSV missing: {csv_path}")
+
+    trends_cache_path = BACKEND_DIR / "trends_cache.json"
+    category_cache_path = BACKEND_DIR / "category_trends_cache.json"
+    dataset_cache_dir = BACKEND_DIR / "datasets" / "trends_cache"
+    per_trends_path = dataset_cache_dir / f"{active_id}__trends.json"
+    per_cats_path = dataset_cache_dir / f"{active_id}__categories.json"
+
+    # Fast path: reuse per-dataset caches from a previous activate of this id.
+    # Live trends_cache.json is shared and gets overwritten on every switch.
+    try:
+        options_all = _read_cache(active_id, None)
+        if per_trends_path.is_file() and per_cats_path.is_file() and options_all is not None:
+            existing_trends = json.loads(per_trends_path.read_text(encoding="utf-8"))
+            existing_cats = json.loads(per_cats_path.read_text(encoding="utf-8"))
+            trends_ok = (
+                isinstance(existing_trends, dict)
+                and existing_trends.get("datasetId") == active_id
+                and bool(existing_trends.get("trendData"))
+                and int((existing_trends.get("summary") or {}).get("totalTrends") or 0) > 0
+            )
+            cats_ok = (
+                isinstance(existing_cats, dict)
+                and existing_cats.get("datasetId") == active_id
+            )
+            if trends_ok and cats_ok:
+                trends_cache_path.write_text(
+                    json.dumps(existing_trends), encoding="utf-8"
+                )
+                category_cache_path.write_text(
+                    json.dumps(existing_cats), encoding="utf-8"
+                )
+                return {
+                    "datasetId": active_id,
+                    "totalRows": int(
+                        (existing_trends.get("summary") or {}).get("totalTrends") or 0
+                    ),
+                    "categories": {},
+                    "dashboardSource": existing_trends.get("source") or "cache_reuse",
+                    "optionsPrecompute": {
+                        "datasetId": active_id,
+                        "productNames": len(options_all.get("productNames") or []),
+                        "reused": True,
+                    },
+                    "reused": True,
+                }
+    except Exception as exc:
+        print(f"warning: cache reuse check failed: {exc}")
 
     # Per-category accumulators only (constant memory). Never load the 76MB
     # prediction CSV here — that OOMs Render free and takes the API down.
@@ -615,10 +664,8 @@ def rebuild_caches_for_active_dataset() -> dict[str, Any]:
             },
         }
 
-    trends_cache_path = BACKEND_DIR / "trends_cache.json"
     # Always rebuild dashboard from the active CSV stream stats.
-    # Never reuse trends_cache.json across activates — a previous dataset's
-    # file would be stamped with the new datasetId and show stale totals.
+    # Never stamp another dataset's live cache with a new datasetId.
     # (Do not call build_trends_payload() — loading prediction CSVs OOMs free tier.)
     trends_payload = _build_dashboard_payload_from_stream(
         active_id=active_id,
@@ -628,9 +675,16 @@ def rebuild_caches_for_active_dataset() -> dict[str, Any]:
         sales_sample=sales_sample,
     )
 
-    category_cache_path = BACKEND_DIR / "category_trends_cache.json"
-    trends_cache_path.write_text(json.dumps(trends_payload), encoding="utf-8")
-    category_cache_path.write_text(json.dumps(category_cache), encoding="utf-8")
+    trends_json = json.dumps(trends_payload)
+    cats_json = json.dumps(category_cache)
+    trends_cache_path.write_text(trends_json, encoding="utf-8")
+    category_cache_path.write_text(cats_json, encoding="utf-8")
+    try:
+        dataset_cache_dir.mkdir(parents=True, exist_ok=True)
+        per_trends_path.write_text(trends_json, encoding="utf-8")
+        per_cats_path.write_text(cats_json, encoding="utf-8")
+    except OSError as exc:
+        print(f"warning: could not persist per-dataset trends cache: {exc}")
 
     options_precompute: dict[str, Any] | None = None
     try:
@@ -660,7 +714,7 @@ def rebuild_caches_for_active_dataset() -> dict[str, Any]:
         print(f"warning: options precompute failed: {exc}")
         options_precompute = {"error": str(exc)}
 
-    return {
+    result = {
         "datasetId": active_id,
         "totalRows": total_rows,
         "categories": {
@@ -670,6 +724,13 @@ def rebuild_caches_for_active_dataset() -> dict[str, Any]:
         "dashboardSource": trends_payload.get("source"),
         "optionsPrecompute": options_precompute,
     }
+
+    # Free stream accumulators before the next request on 512MB instances.
+    del cat_month, cat_totals, cat_materials, cat_years, sales_sample
+    del options_all, options_by_cat, options_categories
+    gc.collect()
+
+    return result
 
 
 def _build_dashboard_payload_from_stream(
