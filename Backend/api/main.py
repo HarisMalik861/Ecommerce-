@@ -310,8 +310,22 @@ async def activate_dataset(dataset_id: str) -> JSONResponse:
             status_code=500,
         )
 
+    # Load per-dataset model artifacts in-process only.
+    # Do NOT spawn dataset_admin.py here — its ensure_registry_seeded()/Neon
+    # hydrate races the registry and can briefly revert activeId, so /v1/trends
+    # keeps returning the previous dataset after a successful activate.
+    used_cache = False
+    try:
+        from model_cache import has_cached_model, load_cache
+
+        if has_cached_model(dataset_id):
+            load_cache(dataset_id)
+            used_cache = True
+    except Exception as exc:  # noqa: BLE001
+        print(f"warning: model cache load skipped: {exc}")
+
     job_id = uuid.uuid4().hex
-    status_path = write_job(
+    write_job(
         job_id,
         {
             "status": "completed",
@@ -324,14 +338,10 @@ async def activate_dataset(dataset_id: str) -> JSONResponse:
                 "previousDatasetId": previous_id,
                 "retrained": False,
                 "predictionsRefreshed": False,
+                "usedCache": used_cache,
                 "trendsRebuilt": trends_rebuilt,
             },
         },
-    )
-    # Optional: load per-dataset model cache in background (best effort).
-    start_detached(
-        "dataset_admin.py",
-        ["activate", dataset_id, str(status_path)],
     )
     return JSONResponse(
         {
@@ -342,6 +352,7 @@ async def activate_dataset(dataset_id: str) -> JSONResponse:
             "result": {
                 "activeId": dataset_id,
                 "previousDatasetId": previous_id,
+                "usedCache": used_cache,
                 "trendsRebuilt": trends_rebuilt,
             },
         }
