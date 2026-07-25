@@ -22,6 +22,7 @@ FROM node:20-bookworm-slim AS runtime
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PYTHONUNBUFFERED=1 \
+    PORT=3000 \
     PATH="/opt/venv/bin:${PATH}"
 
 # System libs for xgboost, matplotlib, and Python venv
@@ -37,13 +38,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Python ML stack (used by Next.js API routes via spawn("python", ...))
+# Python ML stack
 COPY Backend/requirements.txt Backend/requirements.txt
 RUN python3 -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir --upgrade pip \
     && /opt/venv/bin/pip install --no-cache-dir -r Backend/requirements.txt
 
-# Backend scripts (CSVs/models/datasets come from host volume at runtime)
+# Backend scripts & directories
 COPY Backend/*.py Backend/
 RUN mkdir -p Backend/datasets Backend/models Backend/upload_jobs
 
@@ -59,8 +60,7 @@ COPY Frontend/scripts ./scripts
 COPY Frontend/schema.sql ./schema.sql
 COPY Frontend/next.config.mjs ./next.config.mjs
 
-WORKDIR /app/Frontend
-
 EXPOSE 3000
 
-CMD ["npm", "run", "start"]
+# Bind Next.js to Render's dynamic PORT variable
+CMD ["sh", "-c", "npx next start -p ${PORT:-3000}"]
