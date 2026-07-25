@@ -139,12 +139,35 @@ export default function DatasetPage() {
   }, [datasetApi]);
 
   const pollJobStatus = async (jobId: string) => {
-    const response = await authFetch(
-      datasetApi(`/v1/admin/jobs/${encodeURIComponent(jobId)}`),
+    // Prefer Vercel BFF for status polls (small JSON, more reliable than cross-origin).
+    let response = await authFetch(
+      `/api/admin/dataset/upload?jobId=${encodeURIComponent(jobId)}`,
     );
-    const payload = await response.json();
+    // Fallback to Render direct if BFF is unavailable.
+    if (response.status >= 500 || response.status === 502) {
+      response = await authFetch(
+        datasetApi(`/v1/admin/jobs/${encodeURIComponent(jobId)}`),
+      );
+    }
+    const payload = await response.json().catch(() => ({}));
+
+    // Job file gone (Render free restart / redeploy) — stop polling cleanly.
+    if (response.status === 404) {
+      setActiveJobId(null);
+      localStorage.removeItem("datasetUploadJobId");
+      setJobStatus(null);
+      setUploadError({
+        message:
+          "Background job was interrupted (server restarted). Please upload the dataset again.",
+      });
+      toast.error("Job interrupted — please upload again.");
+      return true;
+    }
+
     if (!response.ok) {
-      throw new Error(payload?.error || "Failed to fetch job status");
+      throw new Error(
+        payload?.error || payload?.detail || "Failed to fetch job status",
+      );
     }
 
     setJobStatus({
@@ -230,19 +253,35 @@ export default function DatasetPage() {
   useEffect(() => {
     if (!activeJobId) return;
     let stopped = false;
+    let failCount = 0;
     const tick = async () => {
       try {
         const done = await pollJobStatus(activeJobId);
         if (done) stopped = true;
+        failCount = 0;
       } catch {
-        setUploadError({ message: "Could not fetch background job status." });
+        failCount += 1;
+        // Don't spam forever — after a few failures, clear stuck job UI.
+        if (failCount >= 3) {
+          stopped = true;
+          setActiveJobId(null);
+          localStorage.removeItem("datasetUploadJobId");
+          setJobStatus(null);
+          setUploadError({
+            message:
+              "Could not fetch background job status. The job may still be running — refresh and check the dataset list, or upload again.",
+          });
+        }
       }
     };
     void tick();
     const interval = setInterval(() => {
       if (!stopped) void tick();
     }, 2500);
-    return () => clearInterval(interval);
+    return () => {
+      stopped = true;
+      clearInterval(interval);
+    };
   }, [activeJobId]);
 
   const onUpload = async () => {

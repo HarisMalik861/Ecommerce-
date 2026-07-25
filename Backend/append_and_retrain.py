@@ -128,22 +128,65 @@ def main():
         new_dataset_id = register_dataset(cleaned_tmp, original_name)
         set_active(new_dataset_id)
 
+        # Persist "registered" early so a later OOM/restart still leaves a usable dataset.
         write_status(
             status_path,
-            {"status": "running", "progress": 70, "message": "Retraining model on active dataset"},
+            {
+                "status": "running",
+                "progress": 55,
+                "message": "Dataset saved. Starting model retrain...",
+                "result": {
+                    "newDatasetId": new_dataset_id,
+                    "previousDatasetId": previous_dataset_id,
+                    "rows": int(len(cleaned_upload)),
+                    "totalRows": int(len(cleaned_upload)),
+                    "retrained": False,
+                    "predictionsRefreshed": False,
+                    "preprocessingReport": preprocessing_report,
+                },
+            },
         )
-        run_script("train_model.py")
 
-        write_status(
-            status_path,
-            {"status": "running", "progress": 90, "message": "Refreshing prediction outputs"},
-        )
-        run_script("predict_future_sales.py")
-
+        retrained = False
+        predictions_refreshed = False
+        train_error = None
         try:
-            save_cache(new_dataset_id)
-        except Exception as cache_exc:
-            print(f"warning: failed to cache model for {new_dataset_id}: {cache_exc}")
+            write_status(
+                status_path,
+                {
+                    "status": "running",
+                    "progress": 70,
+                    "message": "Retraining model on active dataset",
+                },
+            )
+            run_script("train_model.py")
+            retrained = True
+
+            write_status(
+                status_path,
+                {
+                    "status": "running",
+                    "progress": 90,
+                    "message": "Refreshing prediction outputs",
+                },
+            )
+            run_script("predict_future_sales.py")
+            predictions_refreshed = True
+
+            try:
+                save_cache(new_dataset_id)
+            except Exception as cache_exc:
+                print(f"warning: failed to cache model for {new_dataset_id}: {cache_exc}")
+        except Exception as train_exc:
+            # Keep the uploaded dataset even if retrain dies (common on free RAM limits).
+            train_error = str(train_exc)
+            print(f"warning: retrain/predict failed, dataset kept: {train_error}")
+            if model_backup:
+                restore_file(model_backup, MODEL_FILE)
+            if enc_backup:
+                restore_file(enc_backup, ENCODERS_FILE)
+            if feat_backup:
+                restore_file(feat_backup, FEATURES_FILE)
 
         total_rows = int(len(cleaned_upload))
         result = {
@@ -151,16 +194,25 @@ def main():
             "previousDatasetId": previous_dataset_id,
             "rows": total_rows,
             "totalRows": total_rows,
-            "retrained": True,
-            "predictionsRefreshed": True,
+            "retrained": retrained,
+            "predictionsRefreshed": predictions_refreshed,
             "preprocessingReport": preprocessing_report,
+            "trainError": train_error,
         }
+        message = (
+            "Dataset registered, activated, model retrained, predictions refreshed"
+            if retrained and predictions_refreshed
+            else (
+                "Dataset registered and activated. Model retrain skipped/failed "
+                "(not enough server memory). Dataset is still available."
+            )
+        )
         write_status(
             status_path,
             {
                 "status": "completed",
                 "progress": 100,
-                "message": "Dataset registered, activated, model retrained, predictions refreshed",
+                "message": message,
                 "result": result,
             },
         )
