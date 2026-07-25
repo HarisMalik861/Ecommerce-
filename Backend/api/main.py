@@ -122,7 +122,16 @@ async def dataset_options(category: str = "") -> JSONResponse:
 @app.get("/v1/trends", dependencies=[Depends(require_api_key)])
 async def trends(refresh: bool = False) -> JSONResponse:
     try:
-        payload = build_trends_payload(refresh=refresh)
+        cache_path = BACKEND_DIR / "trends_cache.json"
+        # Prefer precomputed cache on small free instances (avoids loading 76MB CSV).
+        if not refresh and cache_path.is_file():
+            payload = json.loads(cache_path.read_text(encoding="utf-8"))
+        else:
+            payload = build_trends_payload(refresh=refresh)
+            try:
+                cache_path.write_text(json.dumps(payload), encoding="utf-8")
+            except OSError:
+                pass
         return JSONResponse(
             payload,
             headers={
@@ -136,6 +145,16 @@ async def trends(refresh: bool = False) -> JSONResponse:
 @app.get("/v1/trends/categories/{category_id}", dependencies=[Depends(require_api_key)])
 async def trends_category(category_id: str) -> JSONResponse:
     try:
+        cache_path = BACKEND_DIR / "category_trends_cache.json"
+        if cache_path.is_file():
+            cached = json.loads(cache_path.read_text(encoding="utf-8"))
+            if category_id in cached:
+                return JSONResponse(
+                    cached[category_id],
+                    headers={
+                        "Cache-Control": "public, max-age=10, stale-while-revalidate=30",
+                    },
+                )
         payload = build_category_payload(category_id)
         return JSONResponse(
             payload,
