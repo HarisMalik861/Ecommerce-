@@ -175,14 +175,22 @@ async def trends(refresh: bool = False) -> JSONResponse:
             cache_ok = isinstance(cached, dict) and (
                 not active_id or cached.get("datasetId") == active_id
             )
-            # Reject broken lightweight caches (zeros everywhere / empty charts).
+            # Reject broken caches (zeros, empty charts, or absurd Top Potential).
             if cache_ok:
                 summary = cached.get("summary") or {}
                 has_chart = bool(cached.get("trendData"))
                 has_segments = bool(cached.get("trendCategories"))
-                looks_broken = (
-                    int(summary.get("totalTrends") or 0) > 0
-                    and (not has_chart or not has_segments or float(summary.get("accuracy") or 0) <= 0)
+                total_trends = int(summary.get("totalTrends") or 0)
+                top_potential = int(summary.get("activeUsers") or 0)
+                # e.g. 300k products with Top Potential=1 after bad category fallback
+                absurd_top_potential = total_trends >= 1000 and top_potential < max(
+                    10, total_trends // 20
+                )
+                looks_broken = total_trends > 0 and (
+                    not has_chart
+                    or not has_segments
+                    or float(summary.get("accuracy") or 0) <= 0
+                    or absurd_top_potential
                 )
                 if not looks_broken:
                     payload = cached

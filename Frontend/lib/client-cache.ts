@@ -41,7 +41,7 @@ export function clearTrendsClientCaches() {
       const key = window.sessionStorage.key(i);
       if (!key) continue;
       if (
-        key === "dashboard_trends_v1" ||
+        key.startsWith("dashboard_trends_") ||
         key.startsWith("category_trends_")
       ) {
         keysToRemove.push(key);

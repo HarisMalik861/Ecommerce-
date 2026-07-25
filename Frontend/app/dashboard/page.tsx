@@ -47,8 +47,8 @@ interface TrendData {
 export default function DashboardPage() {
   const [data, setData] = useState<TrendData | null>(null);
   const [loading, setLoading] = useState(true);
-  const CACHE_KEY = "dashboard_trends_v1";
-  const CACHE_TTL_MS = 30_000;
+  const CACHE_KEY = "dashboard_trends_v3";
+  const CACHE_TTL_MS = 15_000;
 
   useEffect(() => {
     const fetchTrends = async () => {
@@ -129,21 +129,21 @@ export default function DashboardPage() {
         <div className="mb-8 grid grid-cols-1 gap-3 sm:grid-cols-3 md:gap-4">
           <StatCard
             title="Products We Track"
-            value={data?.summary.totalTrends ?? 0}
+            value={Number(data?.summary.totalTrends ?? 0).toLocaleString()}
             subtitle={`${data?.summary.cardChanges?.totalTrends ?? 0}% growing`}
             icon={<BarChart3 className="h-6 w-6" />}
             delay={0.1}
           />
           <StatCard
             title="Top Potential"
-            value={data?.summary.activeUsers ?? 0}
+            value={Number(data?.summary.activeUsers ?? 0).toLocaleString()}
             subtitle={`${data?.summary.cardChanges?.activeUsers ?? 0}% of products`}
             icon={<TrendingUp className="h-6 w-6" />}
             delay={0.15}
           />
           <StatCard
             title="Prediction Accuracy"
-            value={`${data?.summary.accuracy}%`}
+            value={`${data?.summary.accuracy ?? 0}%`}
             hideChange
             icon={<Lightbulb className="h-6 w-6" />}
             delay={0.2}
