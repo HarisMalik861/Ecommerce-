@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import math
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -408,5 +409,214 @@ def build_category_payload(category_id: str) -> dict[str, Any]:
             "totalProducts": total_products,
             "avgPrice": round(avg_price),
             "growthPct": round(growth_pct, 1),
+        },
+    }
+
+
+SLUG_TO_CATEGORY = {
+    "t-shirts": "T-Shirt",
+    "jeans": "Jeans",
+    "shoes": "Shoes",
+    "socks": "Socks",
+    "shorts": "Shorts",
+}
+CATEGORY_TO_SLUG = {v: k for k, v in SLUG_TO_CATEGORY.items()}
+MONTH_ORDER = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+]
+
+
+def rebuild_caches_for_active_dataset() -> dict[str, Any]:
+    """
+    Stream the active dataset CSV and rebuild trends JSON caches.
+
+    Render free cannot retrain XGBoost on every activate, but category/trends
+    pages must still reflect the active dataset (counts, monthly sales, etc.).
+    Predicted sales use a light historical proxy when model predictions are stale.
+    """
+    import sys
+
+    backend_dir = str(BACKEND_DIR)
+    if backend_dir not in sys.path:
+        sys.path.insert(0, backend_dir)
+
+    from dataset_registry import get_active_id, get_active_path
+
+    active_id = get_active_id()
+    csv_path = Path(get_active_path())
+    if not csv_path.is_file():
+        raise FileNotFoundError(f"Active dataset CSV missing: {csv_path}")
+
+    # Per-category accumulators (constant memory).
+    cat_month: dict[str, dict[str, dict[str, float]]] = {
+        cat: {} for cat in CATEGORY_TO_SLUG
+    }
+    cat_totals: dict[str, dict[str, float]] = {
+        cat: {
+            "sales": 0.0,
+            "predicted": 0.0,
+            "products": 0.0,
+            "price_sum": 0.0,
+        }
+        for cat in CATEGORY_TO_SLUG
+    }
+    cat_materials: dict[str, dict[str, float]] = {cat: defaultdict(float) for cat in CATEGORY_TO_SLUG}
+    cat_years: dict[str, list[int]] = {cat: [] for cat in CATEGORY_TO_SLUG}
+    total_rows = 0
+
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            category = (row.get("Category") or "").strip()
+            if category not in cat_month:
+                continue
+            total_rows += 1
+            month = (row.get("Month") or "Unknown").strip()
+            sales = _parse_number(row.get("Sales"))
+            # Proxy forecast: keep historical scale so charts update with the
+            # active dataset even when XGBoost retrain was skipped.
+            predicted = sales
+            price = _parse_number(row.get("Price"))
+
+            month_bucket = cat_month[category].setdefault(
+                month,
+                {"currentSales": 0.0, "predictedSales": 0.0, "products": 0.0},
+            )
+            month_bucket["currentSales"] += sales
+            month_bucket["predictedSales"] += predicted
+            month_bucket["products"] += 1
+
+            totals = cat_totals[category]
+            totals["sales"] += sales
+            totals["predicted"] += predicted
+            totals["products"] += 1
+            totals["price_sum"] += price
+
+            material = (row.get("Material") or "Other").strip() or "Other"
+            cat_materials[category][material] += sales
+
+            year_raw = _parse_number(row.get("Year"), float("nan"))
+            if not math.isnan(year_raw):
+                cat_years[category].append(int(year_raw))
+
+    category_cache: dict[str, Any] = {"datasetId": active_id}
+    for category, slug in CATEGORY_TO_SLUG.items():
+        months = cat_month[category]
+        chart_data = [
+            {
+                "label": month,
+                "currentSales": round(months[month]["currentSales"]),
+                "predictedSales": round(months[month]["predictedSales"]),
+                "products": round(months[month]["products"]),
+            }
+            for month in MONTH_ORDER
+            if month in months
+        ]
+        totals = cat_totals[category]
+        total_products = int(totals["products"])
+        total_sales = totals["sales"]
+        total_predicted = totals["predicted"]
+        avg_price = totals["price_sum"] / total_products if total_products else 0.0
+        growth_pct = (
+            ((total_predicted - total_sales) / total_sales) * 100
+            if total_sales > 0
+            else 0.0
+        )
+        peak_month = (
+            max(chart_data, key=lambda item: item["currentSales"])["label"]
+            if chart_data
+            else None
+        )
+        top_materials = [
+            name
+            for name, _ in sorted(
+                cat_materials[category].items(), key=lambda item: item[1], reverse=True
+            )[:3]
+        ]
+        insights: list[str] = []
+        if peak_month:
+            insights.append(f"Peak month: {peak_month}")
+        if top_materials:
+            insights.append(f"Top materials by sales: {', '.join(top_materials)}")
+        insights.append(f"Average price: PKR {round(avg_price):,}")
+        insights.append(f"{total_products:,} products in dataset")
+        years = cat_years[category]
+        if years:
+            min_year = min(years)
+            max_year = max(years)
+            insights.append(f"Historical data: {min_year}–{max_year}")
+            insights.append(f"Forecast target year: {max_year + 1}")
+        insights.append("Trends rebuilt from active dataset (historical proxy).")
+
+        category_cache[slug] = {
+            "category": category,
+            "datasetId": active_id,
+            "chartData": chart_data,
+            "insights": insights,
+            "summary": {
+                "totalSales": round(total_sales),
+                "totalPredictedSales": round(total_predicted),
+                "totalProducts": total_products,
+                "avgPrice": round(avg_price),
+                "growthPct": round(growth_pct, 1),
+            },
+        }
+
+    # Lightweight dashboard trends payload (avoid loading 76MB prediction CSVs).
+    now = datetime.now(timezone.utc).isoformat()
+    trend_categories = []
+    for category, slug in CATEGORY_TO_SLUG.items():
+        totals = cat_totals[category]
+        trend_categories.append(
+            {
+                "id": slug,
+                "name": category,
+                "count": int(totals["products"]),
+                "predictedSales": round(totals["predicted"]),
+                "currentSales": round(totals["sales"]),
+            }
+        )
+    trends_payload = {
+        "datasetId": active_id,
+        "trendData": [],
+        "trendCategories": trend_categories,
+        "predictions": [],
+        "summary": {
+            "totalTrends": total_rows,
+            "activeUsers": total_rows,
+            "accuracy": 0,
+            "marketGrowth": 0,
+            "cardChanges": {
+                "totalTrends": 0,
+                "activeUsers": 0,
+                "accuracy": 0,
+                "marketGrowth": 0,
+            },
+            "lastUpdated": now,
+            "source": "active_dataset_stream",
+        },
+    }
+
+    trends_cache_path = BACKEND_DIR / "trends_cache.json"
+    category_cache_path = BACKEND_DIR / "category_trends_cache.json"
+    trends_cache_path.write_text(json.dumps(trends_payload), encoding="utf-8")
+    category_cache_path.write_text(json.dumps(category_cache), encoding="utf-8")
+
+    return {
+        "datasetId": active_id,
+        "totalRows": total_rows,
+        "categories": {
+            slug: int(cat_totals[cat]["products"]) for cat, slug in CATEGORY_TO_SLUG.items()
         },
     }

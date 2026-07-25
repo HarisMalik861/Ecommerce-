@@ -127,6 +127,7 @@ def cmd_activate(dataset_id: str, status_path: str | None):
         retrained = False
         predictions_refreshed = False
         train_error = None
+        trends_rebuilt = None
 
         if has_cached_model(dataset_id):
             write_status(
@@ -181,13 +182,31 @@ def cmd_activate(dataset_id: str, status_path: str | None):
                     status_path,
                     {
                         "status": "running",
-                        "progress": 80,
+                        "progress": 70,
                         "message": (
-                            "Dataset activated. Skipping retrain on this server "
-                            "(low memory). Predictions keep using the previous model."
+                            "Dataset activated. Skipping model retrain; "
+                            "rebuilding trends from active dataset..."
                         ),
                     },
                 )
+
+        # Always rebuild trends caches from the active CSV so Trends pages
+        # stop showing baseline counts after switching datasets.
+        write_status(
+            status_path,
+            {
+                "status": "running",
+                "progress": 90,
+                "message": "Refreshing trends for the active dataset",
+            },
+        )
+        try:
+            from api.trends_agg import rebuild_caches_for_active_dataset
+
+            trends_rebuilt = rebuild_caches_for_active_dataset()
+        except Exception as trends_exc:
+            print(f"warning: trends rebuild failed: {trends_exc}")
+            trends_rebuilt = {"error": str(trends_exc)}
 
         result = {
             "activeId": dataset_id,
@@ -196,15 +215,15 @@ def cmd_activate(dataset_id: str, status_path: str | None):
             "predictionsRefreshed": predictions_refreshed,
             "usedCache": used_cache,
             "trainError": train_error,
+            "trendsRebuilt": trends_rebuilt,
         }
         if used_cache:
-            message = "Active dataset switched (cached model loaded)"
+            message = "Active dataset switched (cached model + trends refreshed)"
         elif retrained and predictions_refreshed:
             message = "Active dataset switched and model retrained"
         else:
             message = (
-                "Active dataset switched. Model retrain skipped "
-                "(not enough server memory). Dataset is still available."
+                "Active dataset switched and trends refreshed from this dataset."
             )
         write_status(
             status_path,

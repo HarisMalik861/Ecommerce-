@@ -27,7 +27,11 @@ from fastapi.responses import JSONResponse
 
 from .runner import BACKEND_DIR, read_job, run_script, start_detached, write_job
 from .security import require_api_key
-from .trends_agg import build_category_payload, build_trends_payload
+from .trends_agg import (
+    build_category_payload,
+    build_trends_payload,
+    rebuild_caches_for_active_dataset,
+)
 
 # Backend scripts/modules live one level up from api/
 if str(BACKEND_DIR) not in sys.path:
@@ -137,15 +141,34 @@ async def dataset_options(category: str = "") -> JSONResponse:
 async def trends(refresh: bool = False) -> JSONResponse:
     try:
         cache_path = BACKEND_DIR / "trends_cache.json"
-        # Prefer precomputed cache on small free instances (avoids loading 76MB CSV).
+        active_id = None
+        try:
+            active_id = get_active_id()
+        except Exception:
+            active_id = None
+
+        payload: dict[str, Any] | None = None
         if not refresh and cache_path.is_file():
-            payload = json.loads(cache_path.read_text(encoding="utf-8"))
-        else:
-            payload = build_trends_payload(refresh=refresh)
+            cached = json.loads(cache_path.read_text(encoding="utf-8"))
+            if isinstance(cached, dict) and (
+                not active_id or cached.get("datasetId") == active_id
+            ):
+                payload = cached
+
+        if payload is None:
             try:
-                cache_path.write_text(json.dumps(payload), encoding="utf-8")
-            except OSError:
-                pass
+                rebuild = rebuild_caches_for_active_dataset()
+                payload = json.loads(cache_path.read_text(encoding="utf-8"))
+                payload.setdefault("rebuild", rebuild)
+            except Exception:
+                # Fallback to prediction-CSV builder (baseline / local).
+                payload = build_trends_payload(refresh=refresh)
+                payload["datasetId"] = active_id
+                try:
+                    cache_path.write_text(json.dumps(payload), encoding="utf-8")
+                except OSError:
+                    pass
+
         return JSONResponse(
             payload,
             headers={
@@ -160,16 +183,42 @@ async def trends(refresh: bool = False) -> JSONResponse:
 async def trends_category(category_id: str) -> JSONResponse:
     try:
         cache_path = BACKEND_DIR / "category_trends_cache.json"
+        active_id = None
+        try:
+            active_id = get_active_id()
+        except Exception:
+            active_id = None
+
         if cache_path.is_file():
             cached = json.loads(cache_path.read_text(encoding="utf-8"))
-            if category_id in cached:
+            cache_matches = (
+                isinstance(cached, dict)
+                and (not active_id or cached.get("datasetId") == active_id)
+            )
+            if cache_matches and category_id in cached:
                 return JSONResponse(
                     cached[category_id],
                     headers={
                         "Cache-Control": "public, max-age=10, stale-while-revalidate=30",
                     },
                 )
+            if not cache_matches:
+                try:
+                    rebuild_caches_for_active_dataset()
+                    cached = json.loads(cache_path.read_text(encoding="utf-8"))
+                    if category_id in cached:
+                        return JSONResponse(
+                            cached[category_id],
+                            headers={
+                                "Cache-Control": "public, max-age=10, stale-while-revalidate=30",
+                            },
+                        )
+                except Exception:
+                    pass
+
         payload = build_category_payload(category_id)
+        if active_id:
+            payload["datasetId"] = active_id
         return JSONResponse(
             payload,
             headers={
@@ -218,27 +267,55 @@ async def activate_dataset(dataset_id: str) -> JSONResponse:
     if not re.fullmatch(r"[a-zA-Z0-9_-]+", dataset_id):
         return JSONResponse({"error": "Invalid dataset id"}, status_code=400)
 
+    # Flip active dataset + rebuild trends immediately so Trends/Prediction
+    # pages stop showing the previous (baseline) cache right away.
+    try:
+        previous_id = get_active_id()
+    except Exception:
+        previous_id = None
+    try:
+        set_active(dataset_id)
+        trends_rebuilt = rebuild_caches_for_active_dataset()
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse(
+            {"error": f"Failed to activate dataset: {exc}"},
+            status_code=500,
+        )
+
     job_id = uuid.uuid4().hex
     status_path = write_job(
         job_id,
         {
-            "status": "queued",
-            "progress": 2,
-            "message": "Dataset activation queued",
+            "status": "completed",
+            "progress": 100,
+            "message": "Active dataset switched and trends refreshed.",
             "datasetId": dataset_id,
             "createdAt": datetime.now(timezone.utc).isoformat(),
+            "result": {
+                "activeId": dataset_id,
+                "previousDatasetId": previous_id,
+                "retrained": False,
+                "predictionsRefreshed": False,
+                "trendsRebuilt": trends_rebuilt,
+            },
         },
     )
+    # Optional: load per-dataset model cache in background (best effort).
     start_detached(
         "dataset_admin.py",
         ["activate", dataset_id, str(status_path)],
     )
     return JSONResponse(
         {
-            "message": "Dataset activation started in background.",
+            "message": "Active dataset switched and trends refreshed.",
             "jobId": job_id,
-            "status": "queued",
-            "progress": 2,
+            "status": "completed",
+            "progress": 100,
+            "result": {
+                "activeId": dataset_id,
+                "previousDatasetId": previous_id,
+                "trendsRebuilt": trends_rebuilt,
+            },
         }
     )
 
@@ -492,6 +569,12 @@ async def upload_dataset(
         for path in (uploaded_tmp, cleaned_tmp):
             path.unlink(missing_ok=True)
 
+    trends_rebuilt: dict[str, Any] | None = None
+    try:
+        trends_rebuilt = rebuild_caches_for_active_dataset()
+    except Exception as trends_exc:  # noqa: BLE001
+        trends_rebuilt = {"error": str(trends_exc)}
+
     result = {
         "newDatasetId": new_dataset_id,
         "previousDatasetId": previous_dataset_id,
@@ -500,10 +583,9 @@ async def upload_dataset(
         "retrained": False,
         "predictionsRefreshed": False,
         "preprocessingReport": preprocessing_report,
+        "trendsRebuilt": trends_rebuilt,
     }
-    message = (
-        "Dataset registered and activated successfully."
-    )
+    message = "Dataset registered, activated, and trends refreshed."
     write_job(
         job_id,
         {

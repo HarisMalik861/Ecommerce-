@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { authFetch, getPublicBackendUrl } from "@/lib/auth-fetch";
+import { clearTrendsClientCaches } from "@/lib/client-cache";
 
 const REQUIRED_COLUMNS = [
   "Product_Name",
@@ -206,17 +207,20 @@ export default function DatasetPage() {
             isBaseline: Boolean(prev?.isBaseline),
           });
         }
+        clearTrendsClientCaches();
         toast.success(
           result?.retrained
             ? "Dataset registered and model retrained."
             : "Dataset uploaded successfully.",
         );
       } else if (activatedId) {
+        clearTrendsClientCaches();
         await loadDatasets();
         toast.success(
-          payload?.message || "Active dataset switched.",
+          payload?.message || "Active dataset switched. Trends refreshed.",
         );
       } else {
+        clearTrendsClientCaches();
         await loadDatasets();
         toast.success(payload?.message || "Job completed.");
       }
@@ -359,6 +363,7 @@ export default function DatasetPage() {
           progress: 100,
           message: payload.message,
         });
+        clearTrendsClientCaches();
         toast.success(
           result?.retrained
             ? "Dataset registered and model retrained."
@@ -404,6 +409,23 @@ export default function DatasetPage() {
       }
 
       const jobId = String(payload.jobId ?? "");
+      clearTrendsClientCaches();
+      await loadDatasets();
+
+      if (payload.status === "completed") {
+        setActiveJobId(null);
+        localStorage.removeItem("datasetUploadJobId");
+        setJobStatus({
+          status: "completed",
+          progress: 100,
+          message: payload.message,
+        });
+        toast.success(
+          payload?.message || "Active dataset switched. Trends refreshed.",
+        );
+        return;
+      }
+
       if (!jobId) {
         toast.error("Missing activation job id");
         return;
@@ -416,7 +438,7 @@ export default function DatasetPage() {
         progress: 2,
         message: "Switching active dataset...",
       });
-      toast.success("Switching dataset. Retraining in background...");
+      toast.success("Switching dataset and refreshing trends...");
     } catch {
       toast.error("Failed to activate dataset");
     } finally {

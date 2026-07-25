@@ -31,3 +31,26 @@ export function setClientCache<T>(key: string, value: T, ttlMs: number) {
     // Ignore storage failures silently.
   }
 }
+
+/** Clear trends/dashboard caches after switching the active dataset. */
+export function clearTrendsClientCaches() {
+  if (typeof window === "undefined") return;
+  try {
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < window.sessionStorage.length; i += 1) {
+      const key = window.sessionStorage.key(i);
+      if (!key) continue;
+      if (
+        key === "dashboard_trends_v1" ||
+        key.startsWith("category_trends_")
+      ) {
+        keysToRemove.push(key);
+      }
+    }
+    for (const key of keysToRemove) {
+      window.sessionStorage.removeItem(key);
+    }
+  } catch {
+    // ignore
+  }
+}
