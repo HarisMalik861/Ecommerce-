@@ -86,11 +86,10 @@ export async function POST(request: Request) {
       { status: 200 },
     );
 
-    // Set token in cookie
-    // secure:true works correctly behind Cloudflare tunnel (browser sees HTTPS)
+    // Set token in cookie (also returned in JSON for client sessionStorage backup)
     response.cookies.set("token", token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
       maxAge: 60 * 60 * 24 * 7, // 7 days
       path: "/",

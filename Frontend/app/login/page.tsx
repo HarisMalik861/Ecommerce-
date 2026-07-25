@@ -58,8 +58,10 @@ export default function LoginPage() {
 
     try {
       await login(identifier, password);
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      router.push("/dashboard");
+      // Small delay so the session cookie/token is available before navigation
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      // Trends is available to all roles; avoids admin-only bounce edge cases
+      router.replace("/dashboard/trends");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
     }

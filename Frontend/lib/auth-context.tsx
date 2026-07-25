@@ -9,6 +9,8 @@ import React, {
 } from "react";
 import { toast } from "sonner";
 
+const TOKEN_KEY = "ti_auth_token";
+
 export interface User {
   id: number;
   email: string | null;
@@ -31,43 +33,69 @@ interface AuthContextType {
   ) => Promise<void>;
   logout: () => Promise<void>;
   updateProfile: (name: string) => Promise<void>;
+  authHeaders: () => HeadersInit;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+function readStoredToken(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return sessionStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function storeToken(token: string | null) {
+  if (typeof window === "undefined") return;
+  try {
+    if (token) sessionStorage.setItem(TOKEN_KEY, token);
+    else sessionStorage.removeItem(TOKEN_KEY);
+  } catch {
+    // ignore quota / private mode
+  }
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Check if user is logged in on mount
+  const authHeaders = (): HeadersInit => {
+    const token = readStoredToken();
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  };
+
   useEffect(() => {
     const checkAuth = async () => {
       try {
         const response = await fetch("/api/auth/me", {
           credentials: "include",
+          headers: {
+            ...authHeaders(),
+          },
         });
         if (response.ok) {
           const data = await response.json();
           setUser(data.user);
         } else if (response.status === 401 || response.status === 403) {
-          // Explicitly unauthenticated — clear state
           setUser(null);
+          storeToken(null);
         }
-        // 5xx server errors: keep existing user state; don't log out
       } catch {
-        // Network error: keep existing user state; don't log out
+        // Network error: keep existing user state
       } finally {
         setIsLoading(false);
       }
     };
 
     checkAuth();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const login = async (identifier: string, password: string) => {
     setIsLoading(true);
     try {
-      console.log("Login: Sending request to /api/auth/login");
       const response = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -75,18 +103,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         credentials: "include",
       });
 
-      console.log("Login: Response status:", response.status);
-
       if (!response.ok) {
         let errorMessage = "Login failed";
         try {
           const errorData = await response.json();
           errorMessage = errorData.error || errorData.message || errorMessage;
-        } catch (parseError) {
-          console.error("Login: Failed to parse error response:", parseError);
+        } catch {
           errorMessage = `HTTP ${response.status}: ${response.statusText || "Unknown error"}`;
         }
-        console.error("Login: Error:", errorMessage);
         toast.error("Login Failed", {
           description: errorMessage,
         });
@@ -94,14 +118,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       const data = await response.json();
-      console.log("Login: Success, user data:", data.user);
+      if (data.token) {
+        storeToken(data.token);
+      }
       setUser(data.user);
       toast.success("Welcome back!", {
         description: "You have successfully logged in.",
       });
     } catch (error) {
       console.error("Login: Exception:", error);
-
       throw error;
     } finally {
       setIsLoading(false);
@@ -119,7 +144,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const response = await fetch("/api/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email || undefined, contactNumber, password, name }),
+        body: JSON.stringify({
+          email: email || undefined,
+          contactNumber,
+          password,
+          name,
+        }),
         credentials: "include",
       });
 
@@ -128,7 +158,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
           const errorData = await response.json();
           errorMessage = errorData.error || errorData.message || errorMessage;
-        } catch (parseError) {
+        } catch {
           errorMessage = `HTTP ${response.status}: ${response.statusText || "Unknown error"}`;
         }
         toast.error("Signup Failed", {
@@ -137,13 +167,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         throw new Error(errorMessage);
       }
 
-      // Don't auto-login, just show success message
       toast.success("Account Created!", {
         description: "Please sign in with your credentials.",
       });
     } catch (error) {
       console.error("Signup error:", error);
-
       throw error;
     } finally {
       setIsLoading(false);
@@ -155,6 +183,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const response = await fetch("/api/auth/logout", {
         method: "POST",
         credentials: "include",
+        headers: {
+          ...authHeaders(),
+        },
       });
 
       if (!response.ok) {
@@ -162,7 +193,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
           const errorData = await response.json();
           errorMessage = errorData.error || errorData.message || errorMessage;
-        } catch (parseError) {
+        } catch {
           errorMessage = `HTTP ${response.status}: ${response.statusText || "Unknown error"}`;
         }
         toast.error("Logout Failed", {
@@ -171,11 +202,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         throw new Error(errorMessage);
       }
 
+      storeToken(null);
       setUser(null);
       toast.success("Logged out");
     } catch (error) {
+      storeToken(null);
+      setUser(null);
       console.error("Logout error:", error);
-
       throw error;
     }
   };
@@ -186,7 +219,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const response = await fetch("/api/auth/profile", {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders(),
+        },
         body: JSON.stringify({ name }),
         credentials: "include",
       });
@@ -213,6 +249,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signup,
         logout,
         updateProfile,
+        authHeaders,
       }}
     >
       {children}

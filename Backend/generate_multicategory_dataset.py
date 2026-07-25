@@ -16,7 +16,7 @@ from numpy.random import default_rng
 import time
 
 RNG  = default_rng(42)
-ROWS = 100_000          # per category
+ROWS = 100_000          # default per category (500k total)
 CATS = ['T-Shirt', 'Jeans', 'Shoes', 'Socks', 'Shorts']
 
 # ─── PER-CATEGORY CONFIG ────────────────────────────────────────────────────
@@ -242,39 +242,88 @@ def generate_category(cat, n, rng, year):
         'Sales':            sales,
     })
 
-# ─── RUN ────────────────────────────────────────────────────────────────────
-if __name__ == '__main__':
+def generate_dataset(total_rows: int, out_path: str | None = None, seed: int = 42):
+    """Generate a balanced multicategory dataset with the same schema as the 500k file."""
+    if total_rows % len(CATS) != 0:
+        raise ValueError(
+            f"total_rows must be divisible by {len(CATS)} categories; got {total_rows}"
+        )
+
+    rows_per_cat = total_rows // len(CATS)
+    rng = default_rng(seed)
     t0 = time.time()
+
     print("=" * 70)
     print("  REALISTIC PAKISTANI E-COMMERCE DATASET GENERATOR")
-    print(f"  Target: {len(CATS) * ROWS:,} rows | {ROWS:,} per category | years {YEARS[0]}–{YEARS[-1]}")
+    print(
+        f"  Target: {total_rows:,} rows | {rows_per_cat:,} per category "
+        f"| years {YEARS[0]}–{YEARS[-1]}"
+    )
     print("=" * 70)
 
-    rows_per_year = ROWS // len(YEARS)
+    rows_per_year = rows_per_cat // len(YEARS)
     frames = []
     for cat in CATS:
         for i, year in enumerate(YEARS):
             n = rows_per_year
             if i == len(YEARS) - 1:
-                n = ROWS - rows_per_year * (len(YEARS) - 1)
-            frames.append(generate_category(cat, n, RNG, year))
+                n = rows_per_cat - rows_per_year * (len(YEARS) - 1)
+            frames.append(generate_category(cat, n, rng, year))
 
     print("\nShuffling...", flush=True)
-    df = pd.concat(frames, ignore_index=True).sample(frac=1, random_state=42).reset_index(drop=True)
+    df = (
+        pd.concat(frames, ignore_index=True)
+        .sample(frac=1, random_state=seed)
+        .reset_index(drop=True)
+    )
 
-    print("\n── Dataset Summary ─────────────────────────────────────────────")
+    if out_path is None:
+        label = f"{total_rows // 1000}k"
+        out_path = f"daraz_multicategory_pakistan_{label}.csv"
+
+    # Save first so a console encoding error cannot lose the file.
+    df.to_csv(out_path, index=False)
+    print(f"\n  Saved -> {out_path}  ({df.shape[0]:,} rows x {df.shape[1]} cols)")
+
+    print("\n-- Dataset Summary ---------------------------------------------")
     print(f"  Shape     : {df.shape}")
     print(f"  Columns   : {list(df.columns)}\n")
-    print(df['Category'].value_counts().to_string())
+    print(df["Category"].value_counts().to_string())
     print("\n  Sales per category:")
-    print(df.groupby('Category')['Sales'].describe()[['mean','std','min','50%','max']].round(0).to_string())
+    print(
+        df.groupby("Category")["Sales"]
+        .describe()[["mean", "std", "min", "50%", "max"]]
+        .round(0)
+        .to_string()
+    )
     print("\n  Rows per year:")
-    print(df['Year'].value_counts().sort_index().to_string())
+    print(df["Year"].value_counts().sort_index().to_string())
     print(f"\n  Corr Price vs Sales    : {df['Price'].corr(df['Sales']):.3f}")
     print(f"  Corr Discount vs Sales : {df['Discount_Pct'].corr(df['Sales']):.3f}")
-
-    out = 'daraz_multicategory_pakistan_500k.csv'
-    df.to_csv(out, index=False)
-    print(f"\n  Saved -> {out}  ({df.shape[0]:,} rows x {df.shape[1]} cols)")
-    print(f"  Time  : {time.time()-t0:.1f}s")
+    print(f"  Time  : {time.time() - t0:.1f}s")
     print("=" * 70)
+    return df
+
+
+# ─── RUN ────────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Generate Daraz-style Pakistani multicategory ecommerce CSVs",
+    )
+    parser.add_argument(
+        "--rows",
+        type=int,
+        default=len(CATS) * ROWS,
+        help="Total rows (must be divisible by 5). Examples: 200000, 300000, 500000",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="Output CSV path (default: daraz_multicategory_pakistan_<Nk>.csv)",
+    )
+    parser.add_argument("--seed", type=int, default=42, help="RNG seed")
+    args = parser.parse_args()
+    generate_dataset(args.rows, args.output, args.seed)
