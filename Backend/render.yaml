@@ -12,5 +12,9 @@ services:
         value: "3.11.9"
       - key: BACKEND_API_KEY
         sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: DATABASE_URL
+        sync: false
       - key: PYTHONUNBUFFERED
         value: "1"

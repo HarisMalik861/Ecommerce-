@@ -71,6 +71,20 @@ app.add_middleware(
 )
 
 
+@app.on_event("startup")
+def _startup_hydrate_datasets() -> None:
+    """Pull uploaded datasets from Neon onto ephemeral Render disk."""
+    try:
+        from dataset_registry import ensure_registry_seeded
+        from dataset_store import ensure_schema, is_enabled
+
+        if is_enabled():
+            ensure_schema()
+        ensure_registry_seeded()
+    except Exception as exc:  # noqa: BLE001
+        print(f"startup dataset hydrate warning: {exc}")
+
+
 def _error_response(payload: dict[str, Any]) -> JSONResponse | None:
     if "__error__" in payload:
         status = int(payload.get("__status__", 500))
@@ -82,11 +96,19 @@ def _error_response(payload: dict[str, Any]) -> JSONResponse | None:
 def health() -> dict[str, Any]:
     preds = BACKEND_DIR / "future_sales_predictions.csv"
     registry = BACKEND_DIR / "datasets" / "registry.json"
+    store_enabled = False
+    try:
+        from dataset_store import is_enabled
+
+        store_enabled = is_enabled()
+    except Exception:
+        store_enabled = False
     return {
         "ok": True,
         "backendDir": str(BACKEND_DIR),
         "predictionsPresent": preds.is_file(),
         "registryPresent": registry.is_file(),
+        "datasetStoreEnabled": store_enabled,
     }
 
 
@@ -243,33 +265,25 @@ async def trends_category(category_id: str) -> JSONResponse:
 
 @app.get("/v1/admin/datasets", dependencies=[Depends(require_api_key)])
 async def list_datasets() -> JSONResponse:
-    registry_path = BACKEND_DIR / "datasets" / "registry.json"
-    registry: dict[str, Any]
-    if registry_path.is_file():
-        registry = json.loads(registry_path.read_text(encoding="utf-8"))
-    else:
-        result = run_script("dataset_admin.py", ["list"], timeout=120)
-        err = _error_response(result)
-        if err:
-            return err
-        registry = result
+    # Prefer registry helpers so Neon hydrate runs before listing.
+    try:
+        from dataset_registry import ensure_registry_seeded, list_datasets as list_local
 
-    active_id = registry.get("activeId")
-    datasets = []
-    for ds in registry.get("datasets") or []:
-        datasets.append(
-            {
-                "id": ds.get("id"),
-                "fileName": ds.get("fileName"),
-                "originalName": ds.get("originalName"),
-                "rows": ds.get("rows"),
-                "sizeBytes": ds.get("sizeBytes"),
-                "isBaseline": bool(ds.get("isBaseline")),
-                "uploadedAt": ds.get("uploadedAt"),
-                "isActive": ds.get("id") == active_id,
-            }
-        )
-    return JSONResponse({"activeId": active_id, "datasets": datasets})
+        ensure_registry_seeded()
+        items = list_local()
+        active_id = None
+        for item in items:
+            if item.get("isActive"):
+                active_id = item.get("id")
+                break
+        if active_id is None:
+            try:
+                active_id = get_active_id()
+            except Exception:
+                active_id = None
+        return JSONResponse({"activeId": active_id, "datasets": items})
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 @app.post("/v1/admin/datasets/{dataset_id}/activate", dependencies=[Depends(require_api_key)])

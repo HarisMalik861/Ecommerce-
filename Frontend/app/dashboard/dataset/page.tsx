@@ -95,11 +95,19 @@ export default function DatasetPage() {
 
   const columnsPreview = useMemo(() => REQUIRED_COLUMNS.join(", "), []);
 
-  /** Prefer direct Render calls for large CSVs (Vercel body limit ~4.5MB). */
+  /**
+   * Large CSV uploads go straight to Render (Vercel body limit ~4.5MB).
+   * List/delete/jobs use the Next.js BFF so admin auth stays reliable.
+   */
   const datasetApi = useCallback((path: string) => {
     const backend = getPublicBackendUrl();
-    if (backend) return `${backend}${path}`;
-    // Local / fallback through Next.js BFF
+    if (
+      backend &&
+      path.startsWith("/v1/admin/datasets/upload") &&
+      !path.includes("?")
+    ) {
+      return `${backend}${path}`;
+    }
     if (path.startsWith("/v1/admin/datasets/upload")) {
       return "/api/admin/dataset/upload";
     }

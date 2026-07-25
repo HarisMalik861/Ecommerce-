@@ -18,6 +18,7 @@ DATASETS_DIR = os.path.join(BACKEND_DIR, "datasets")
 REGISTRY_PATH = os.path.join(DATASETS_DIR, "registry.json")
 BASELINE_CSV = os.path.join(BACKEND_DIR, "daraz_multicategory_pakistan_500k.csv")
 BASELINE_ID = "baseline-500k"
+_HYDRATED_FROM_STORE = False
 
 
 def _utc_now_iso() -> str:
@@ -96,7 +97,23 @@ def ensure_registry_seeded() -> dict[str, Any]:
     Also adopts any pre-existing model artifacts at the Backend/ root as the
     cache for the currently active dataset (so re-activating doesn't retrain).
     """
+    global _HYDRATED_FROM_STORE
     _ensure_dirs()
+
+    # Restore uploads from Neon before reading local registry (Render free disk
+    # is wiped on restart/redeploy). Only once per process.
+    if not _HYDRATED_FROM_STORE:
+        try:
+            from dataset_store import hydrate_to_disk, is_enabled
+
+            if is_enabled():
+                result = hydrate_to_disk()
+                print(f"dataset store hydrate: {result}")
+            _HYDRATED_FROM_STORE = True
+        except Exception as exc:
+            print(f"warning: dataset hydrate skipped: {exc}")
+            _HYDRATED_FROM_STORE = True
+
     registry = _read_registry_raw()
 
     if not registry.get("datasets"):
@@ -242,6 +259,25 @@ def register_dataset(src_csv: str, original_name: str) -> str:
     registry = _read_registry_raw()
     registry.setdefault("datasets", []).append(entry)
     _write_registry(registry)
+
+    try:
+        from dataset_store import upsert_dataset
+
+        upsert_dataset(
+            dataset_id=dataset_id,
+            original_name=safe_name,
+            file_name=entry["fileName"],
+            rows=rows,
+            size_bytes=size_bytes,
+            is_baseline=False,
+            uploaded_at=entry["uploadedAt"],
+            is_active=False,
+            csv_path=dest_path,
+            store_bytes=True,
+        )
+    except Exception as exc:
+        print(f"warning: failed to persist dataset to Postgres: {exc}")
+
     return dataset_id
 
 
@@ -254,6 +290,14 @@ def set_active(dataset_id: str) -> str:
     previous_id = registry.get("activeId")
     registry["activeId"] = dataset_id
     _write_registry(registry)
+
+    try:
+        from dataset_store import mark_active
+
+        mark_active(dataset_id)
+    except Exception as exc:
+        print(f"warning: failed to persist active dataset: {exc}")
+
     return str(previous_id) if previous_id else ""
 
 
@@ -277,6 +321,13 @@ def delete_dataset(dataset_id: str) -> None:
         ds for ds in registry.get("datasets", []) if ds.get("id") != dataset_id
     ]
     _write_registry(registry)
+
+    try:
+        from dataset_store import delete_dataset as delete_remote
+
+        delete_remote(dataset_id)
+    except Exception as exc:
+        print(f"warning: failed to delete dataset from Postgres: {exc}")
 
 
 def get_dataset_meta(dataset_id: str) -> dict[str, Any]:
